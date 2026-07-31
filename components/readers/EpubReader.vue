@@ -485,6 +485,13 @@ export default {
         if (this.savedEbookLocation && reader.book.spine.get(this.savedEbookLocation)) {
           displayCfi = this.savedEbookLocation
         }
+        // Some epubs have spine entries referencing missing manifest items
+        // (e.g. a dangling cover page). Displaying those fails and leaves the
+        // reader blank - start at the first spine item that actually resolves.
+        if (!displayCfi) {
+          const firstValidSection = reader.book.spine.spineItems.find((section) => section.href && section.linear !== false)
+          if (firstValidSection) displayCfi = firstValidSection.href
+        }
 
         reader.rendition.on('displayed', async () => {
           console.log('%c [EpubReader] Rendition displayed', 'color:blue;')
@@ -532,11 +539,25 @@ export default {
         // TODO: To get the correct page need to render twice. On book ready and after first display. Figure out why
         console.log(`[EpubReader] Displaying cfi ${displayCfi}`)
         this.currentLocationCfi = displayCfi
-        reader.rendition.display(displayCfi).then(() => {
-          reader.rendition.display(displayCfi).then(() => {
+        reader.rendition
+          .display(displayCfi)
+          .then(() => {
+            return reader.rendition.display(displayCfi)
+          })
+          .then(() => {
             this.inittingDisplay = false
           })
-        })
+          .catch((error) => {
+            // Saved location points into a section that no longer loads - fall
+            // back to the first resolvable spine item instead of a blank reader
+            console.error(`[EpubReader] Failed to display ${displayCfi}`, error)
+            const firstValidSection = reader.book.spine.spineItems.find((section) => section.href && section.linear !== false)
+            if (!firstValidSection) return
+            this.currentLocationCfi = firstValidSection.href
+            reader.rendition.display(firstValidSection.href).then(() => {
+              this.inittingDisplay = false
+            })
+          })
       })
     },
     applyTheme() {
