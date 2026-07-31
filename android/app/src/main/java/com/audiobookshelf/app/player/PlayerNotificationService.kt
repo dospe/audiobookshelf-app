@@ -2098,7 +2098,20 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           } else {
             if (shelf.type == "book") {
               val children =
-                      (shelf as LibraryShelfBookEntity).entities?.map { libraryItem ->
+                      (shelf as LibraryShelfBookEntity).entities?.mapNotNull { libraryItem ->
+                        if (!libraryItem.checkHasTracks()) {
+                          // Audio-less book (ebook library) - playable with the read
+                          // aloud (TTS) player when it is an epub, hidden otherwise
+                          if ((libraryItem.media as? Book)?.getEbookFormatValue() != "epub") {
+                            return@mapNotNull null
+                          }
+                          return@mapNotNull buildEbookBrowseItem(
+                                  libraryItem.id,
+                                  libraryItem.title,
+                                  libraryItem.authorName,
+                                  libraryItem.getCoverUri()
+                          )
+                        }
                         val progress =
                                 mediaManager.serverUserMediaProgress.find {
                                   it.libraryItemId == libraryItem.id

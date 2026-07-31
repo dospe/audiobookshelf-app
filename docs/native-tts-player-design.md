@@ -429,7 +429,9 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
   - `BrowseTree` už neskrývá knihovny bez audio souborů, pokud jde o book
     knihovnu s položkami (čistě e-knihovní knihovny); nacachované e-knihy
     mají v seznamech ikonu staženo (EXTRA_DOWNLOAD_STATUS) a cover art ze
-    serveru (offline fallback na ikonu knihy)
+    serveru (offline fallback na ikonu knihy); e-knihovní knihovna se tím
+    objeví i v „Recent“ — police nedávno přidaných nabízí epub položky
+    jako `ebook__` (předčítání), ostatní formáty skryje
   - **ověření na DHU zatím neproběhlo**
 - [ ] F3/F4: iOS engine, CarPlay — **odloženo na neurčito** (není iPhone
   na testování)
