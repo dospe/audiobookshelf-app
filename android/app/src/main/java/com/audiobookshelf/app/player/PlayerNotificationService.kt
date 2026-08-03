@@ -363,6 +363,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               author = (libraryItem.media.metadata as? BookMetadata)?.authorName?.ifEmpty { null } ?: extracted.author,
               language = ttsLanguageForBook(extracted.language, libraryItem),
               rate = ttsEngine?.rate ?: 1f,
+              // Keep the last-applied engine; the per-language voice is a reader
+              // setting living in WebView localStorage, so the engine default is used
+              ttsEngine = ttsEngine?.enginePackage,
+              voice = null,
               ebookFormat = "epub",
               chapters = extracted.chapters,
               totalChars = extracted.chapters.sumOf { chapter -> chapter.paragraphs.sumOf { it.chars } }

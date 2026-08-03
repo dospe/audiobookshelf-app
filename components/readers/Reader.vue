@@ -46,6 +46,9 @@
           <span class="material-symbols text-2xl text-fg">add</span>
         </button>
       </div>
+      <button type="button" :aria-label="$strings.HeaderReadAloudSettings" class="inline-flex ml-3" @click.stop="showTTSSettingsDialog = true">
+        <span class="material-symbols text-2xl text-fg">tune</span>
+      </button>
     </div>
 
     <!-- table of contents modal -->
@@ -142,10 +145,19 @@
               </div>
               <ui-toggle-btns v-model="ereaderSettings.keepScreenAwake" name="keep-awake" :items="onOffToggleButtonItems" @input="settingsUpdated" />
             </div>
+            <div v-if="ttsAvailable" class="flex items-center mb-6">
+              <div class="w-32">
+                <p class="text-sm">{{ $strings.HeaderReadAloudSettings }}</p>
+              </div>
+              <ui-btn small @click="showTTSSettingsDialog = true">{{ $strings.LabelReadAloudVoice }}</ui-btn>
+            </div>
           </div>
         </div>
       </div>
     </modals-fullscreen-modal>
+
+    <!-- read aloud (TTS) engine/voice picker -->
+    <modals-tts-settings-dialog v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :is-native="isNativeTTS" @update:engine="setTTSEngine" @update:voice="setTTSVoice" />
   </div>
 </template>
 
@@ -153,6 +165,7 @@
 import { Capacitor } from '@capacitor/core'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
+import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
 
 export default {
   data() {
@@ -167,6 +180,7 @@ export default {
       showTOCModal: false,
       showSettingsModal: false,
       showTTSBar: false,
+      showTTSSettingsDialog: false,
       ttsState: 'stopped',
       comicHasMetadata: false,
       chapters: [],
@@ -182,7 +196,9 @@ export default {
         navigateWithVolumeWhilePlaying: false,
         keepScreenAwake: false,
         ttsLanguage: 'en-US',
-        ttsRate: 1
+        ttsRate: 1,
+        ttsEngine: '',
+        ttsVoices: {}
       }
     }
   },
@@ -367,6 +383,9 @@ export default {
     ttsAvailable() {
       return this.isEpub || this.isMobi || this.isPdf
     },
+    isNativeTTS() {
+      return isNativeTTSPlayerAvailable()
+    },
     isLocal() {
       return !!this.ebookFile?.isLocal || !!this.ebookFile?.localFileId
     },
@@ -454,6 +473,15 @@ export default {
     },
     clickTTSStop() {
       this.$refs.readerComponent?.stopTTS?.()
+    },
+    setTTSEngine(engine) {
+      this.ereaderSettings.ttsEngine = engine
+      this.settingsUpdated()
+    },
+    setTTSVoice(voice) {
+      // Voices are stored per language so the CZ/EN toggle keeps its own pick
+      this.ereaderSettings.ttsVoices = { ...this.ereaderSettings.ttsVoices, [this.ereaderSettings.ttsLanguage]: voice }
+      this.settingsUpdated()
     },
     setTTSRate(delta) {
       const newRate = Math.round((this.ereaderSettings.ttsRate + delta) * 100) / 100

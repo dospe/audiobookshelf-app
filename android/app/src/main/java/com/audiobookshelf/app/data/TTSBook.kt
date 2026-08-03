@@ -16,11 +16,14 @@ data class TTSBook(
   var author: String?,
   var language: String,
   var rate: Float,
+  // TTS engine package name and voice name; null/empty = engine keeps its current values
+  var ttsEngine: String? = null,
+  var voice: String? = null,
   var ebookFormat: String,
   var chapters: MutableList<TTSChapter>,
   var totalChars: Int
 ) {
-  constructor() : this("", null, "", null, "en-US", 1f, "", mutableListOf(), 0)
+  constructor() : this("", null, "", null, "en-US", 1f, null, null, "", mutableListOf(), 0)
 
   /** Total characters before the given position, for progress and time estimates */
   fun charsBefore(chapterIndex: Int, paragraphIndex: Int): Int {
