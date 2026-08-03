@@ -43,9 +43,14 @@ export default {
       ttsParagraphIndex: 0,
       ttsChunks: [],
       ttsChunkIndex: 0,
+      // Resolved index into getSupportedVoices() for the web path; indices are
+      // only stable within one snapshot so it is resolved fresh, never persisted
+      ttsWebVoiceIndex: null,
       ereaderSettings: {
         ttsLanguage: 'en-US',
-        ttsRate: 1
+        ttsRate: 1,
+        ttsEngine: '',
+        ttsVoices: {}
       }
     }
   },
@@ -59,23 +64,45 @@ export default {
     ttsHandleSettingsChange(newSettings) {
       const langChanged = newSettings.ttsLanguage !== this.ereaderSettings.ttsLanguage
       const rateChanged = newSettings.ttsRate !== this.ereaderSettings.ttsRate
-      if (!langChanged && !rateChanged) return
+      const engineChanged = (newSettings.ttsEngine || '') !== (this.ereaderSettings.ttsEngine || '')
+      const newVoice = newSettings.ttsVoices?.[newSettings.ttsLanguage] || ''
+      const oldVoice = this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || ''
+      // A language or engine switch also switches the effective voice
+      const voiceChanged = newVoice !== oldVoice || langChanged || engineChanged
+      if (!langChanged && !rateChanged && !engineChanged && !voiceChanged) return
 
       if (this.ttsUseNative()) {
+        // Order matters: the engine re-init clears the voice, setLanguage picks
+        // a default the voice then overrides
+        if (engineChanged) AbsTTSPlayer.setEngine({ engine: newSettings.ttsEngine || '' }).catch(() => {})
         if (langChanged) AbsTTSPlayer.setLanguage({ lang: newSettings.ttsLanguage }).catch(() => {})
         if (rateChanged) AbsTTSPlayer.setRate({ rate: newSettings.ttsRate }).catch(() => {})
+        if (voiceChanged) AbsTTSPlayer.setVoice({ voice: newVoice }).catch(() => {})
         return
       }
 
-      if (this.ttsState === 'playing') {
-        // Restart the current chunk so the new voice/rate takes effect immediately
-        this.ttsSessionId++
-        TextToSpeech.stop()
-          .catch(() => {})
-          .finally(() => {
-            if (this.ttsState === 'playing') this.speakNextChunk()
-          })
+      // Engine selection is not possible on the web path (no plugin API for it)
+      this.ttsResolveWebVoiceIndex(newSettings).finally(() => {
+        if (this.ttsState === 'playing') {
+          // Restart the current chunk so the new voice/rate takes effect immediately
+          this.ttsSessionId++
+          TextToSpeech.stop()
+            .catch(() => {})
+            .finally(() => {
+              if (this.ttsState === 'playing') this.speakNextChunk()
+            })
+        }
+      })
+    },
+    async ttsResolveWebVoiceIndex(settings = this.ereaderSettings) {
+      const voiceId = settings.ttsVoices?.[settings.ttsLanguage] || ''
+      if (!voiceId) {
+        this.ttsWebVoiceIndex = null
+        return
       }
+      const result = await TextToSpeech.getSupportedVoices().catch(() => null)
+      const index = (result?.voices || []).findIndex((v) => v.voiceURI === voiceId || v.name === voiceId)
+      this.ttsWebVoiceIndex = index >= 0 ? index : null
     },
     ttsUseNative() {
       return !!this.ttsExtractBook && isNativeTTSPlayerAvailable()
@@ -125,6 +152,8 @@ export default {
         author: mediaMetadata.authorName || '',
         language: this.ereaderSettings.ttsLanguage || 'en-US',
         rate: this.ereaderSettings.ttsRate || 1,
+        ttsEngine: this.ereaderSettings.ttsEngine || '',
+        voice: this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || '',
         ebookFormat: extracted.ebookFormat || '',
         chapters,
         totalChars
@@ -163,6 +192,7 @@ export default {
       this.ttsSessionId++
       const session = this.ttsSessionId
       await TextToSpeech.stop().catch(() => {})
+      await this.ttsResolveWebVoiceIndex()
 
       const lang = this.ereaderSettings.ttsLanguage || 'en-US'
       TextToSpeech.isLanguageSupported({ lang })
@@ -258,7 +288,8 @@ export default {
           text: this.ttsChunks[this.ttsChunkIndex],
           lang: this.ereaderSettings.ttsLanguage || 'en-US',
           rate: this.ereaderSettings.ttsRate || 1,
-          category: 'playback'
+          category: 'playback',
+          ...(this.ttsWebVoiceIndex != null ? { voice: this.ttsWebVoiceIndex } : {})
         })
       } catch (error) {
         // Rejection is expected when speech gets interrupted by stop()

@@ -1,7 +1,9 @@
 package com.audiobookshelf.app.plugins
 
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import com.audiobookshelf.app.MainActivity
 import com.audiobookshelf.app.data.TTSBook
@@ -166,6 +168,101 @@ class AbsTTSPlayer : Plugin() {
   }
 
   @PluginMethod
+  fun setEngine(call: PluginCall) {
+    if (!isServiceReady()) return call.reject("Player service not ready")
+    val engine = call.getString("engine") ?: ""
+    mainHandler.post {
+      playerNotificationService.ttsEngine?.setEngine(engine)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun setVoice(call: PluginCall) {
+    if (!isServiceReady()) return call.reject("Player service not ready")
+    val voice = call.getString("voice") ?: ""
+    mainHandler.post {
+      playerNotificationService.ttsEngine?.setVoice(voice)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun openTTSSettings(call: PluginCall) {
+    try {
+      val intent = Intent("com.android.settings.TTS_SETTINGS")
+      intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+      activity.startActivity(intent)
+      call.resolve()
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to open system TTS settings", e)
+      call.reject("Could not open TTS settings")
+    }
+  }
+
+  /**
+   * Run the block with a temporary TextToSpeech instance for enumeration -
+   * independent of the playback engine so it works with no book prepared and
+   * can enumerate an engine other than the active one. Voices are only valid
+   * after the async init, so results resolve from the init listener.
+   */
+  private fun withEnumerationTTS(enginePackage: String?, block: (TextToSpeech?, Boolean) -> Unit) {
+    mainHandler.post {
+      var enumTts: TextToSpeech? = null
+      val initListener = TextToSpeech.OnInitListener { status ->
+        mainHandler.post {
+          block(enumTts, status == TextToSpeech.SUCCESS)
+          enumTts?.shutdown()
+        }
+      }
+      enumTts = if (enginePackage.isNullOrEmpty()) TextToSpeech(context, initListener)
+                else TextToSpeech(context, initListener, enginePackage)
+    }
+  }
+
+  @PluginMethod
+  fun getEngines(call: PluginCall) {
+    // The engines list is a package query and works even when init fails
+    withEnumerationTTS(null) { tts, _ ->
+      val engines = JSONArray()
+      tts?.engines?.forEach { engine ->
+        val engineObj = JSObject()
+        engineObj.put("name", engine.name)
+        engineObj.put("label", engine.label)
+        engines.put(engineObj)
+      }
+      val ret = JSObject()
+      ret.put("engines", engines)
+      call.resolve(ret)
+    }
+  }
+
+  @PluginMethod
+  fun getVoices(call: PluginCall) {
+    val enginePackage = call.getString("engine")
+    val language = call.getString("language")
+    withEnumerationTTS(enginePackage) { tts, ready ->
+      if (!ready) return@withEnumerationTTS call.reject("TTS engine failed to initialize")
+      val voices = JSONArray()
+      // Match on the ISO language part only ("cs") so all regional variants are listed
+      val langPrefix = language?.substringBefore('-')?.lowercase()
+      val engineVoices = try { tts?.voices } catch (e: Exception) { null }
+      engineVoices?.forEach { voice ->
+        if (langPrefix != null && voice.locale.language.lowercase() != langPrefix) return@forEach
+        val voiceObj = JSObject()
+        voiceObj.put("name", voice.name)
+        voiceObj.put("lang", voice.locale.toLanguageTag())
+        voiceObj.put("quality", voice.quality)
+        voiceObj.put("networkRequired", voice.isNetworkConnectionRequired)
+        voices.put(voiceObj)
+      }
+      val ret = JSObject()
+      ret.put("voices", voices)
+      call.resolve(ret)
+    }
+  }
+
+  @PluginMethod
   fun getState(call: PluginCall) {
     if (!isServiceReady()) return call.reject("Player service not ready")
     mainHandler.post {
@@ -179,6 +276,8 @@ class AbsTTSPlayer : Plugin() {
       ret.put("progress", engine?.progress ?: 0.0)
       ret.put("rate", engine?.rate ?: 1f)
       ret.put("language", engine?.language ?: "en-US")
+      ret.put("engine", engine?.enginePackage ?: "")
+      ret.put("voice", engine?.voiceName ?: "")
       call.resolve(ret)
     }
   }

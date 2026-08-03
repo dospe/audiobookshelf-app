@@ -21,7 +21,7 @@ import java.util.Locale
  *
  * See docs/native-tts-player-design.md (A.2)
  */
-class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSpeech.OnInitListener {
+class TTSPlaybackEngine(val context: Context, val listener: Listener) {
 
   enum class TTSState(val value: String) {
     STOPPED("stopped"), PLAYING("playing"), PAUSED("paused")
@@ -44,6 +44,8 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
   private var tts: TextToSpeech? = null
   private var ttsReady = false
   private var pendingOnReady: (() -> Unit)? = null
+  // Incremented on every (re)creation so init callbacks of replaced instances are ignored
+  private var ttsGeneration = 0
 
   var book: TTSBook? = null
     private set
@@ -56,6 +58,10 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
   var rate: Float = 1f
     private set
   var language: String = "en-US"
+    private set
+  var enginePackage: String = "" // "" = system default engine
+    private set
+  var voiceName: String = "" // "" = engine default voice for the language
     private set
 
   private var chunks: List<String> = emptyList()
@@ -175,6 +181,15 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
     book = newBook
     language = newBook.language
     rate = newBook.rate
+    // null = keep current engine/voice (native Android Auto extraction path).
+    // No resume here - play() follows and initializes the new engine lazily
+    newBook.ttsEngine?.let {
+      if (it != enginePackage) {
+        enginePackage = it
+        shutdownTTSInstance()
+      }
+    }
+    newBook.voice?.let { voiceName = it }
     chapterIndex = 0
     paragraphIndex = 0
     chunks = emptyList()
@@ -281,10 +296,55 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
     restartCurrentChunkIfPlaying()
   }
 
+  fun setEngine(newEnginePackage: String) {
+    if (newEnginePackage == enginePackage) return
+    enginePackage = newEnginePackage
+    voiceName = "" // voices are engine-specific; the client sends setVoice right after
+    reinitTTS()
+  }
+
+  fun setVoice(newVoiceName: String) {
+    if (newVoiceName == voiceName) return
+    voiceName = newVoiceName
+    restartCurrentChunkIfPlaying()
+  }
+
+  /** The engine cannot change on a live TextToSpeech instance - shutdown and lazily re-init */
+  private fun reinitTTS() {
+    val wasPlaying = state == TTSState.PLAYING
+    shutdownTTSInstance()
+    if (wasPlaying) {
+      // State stays PLAYING through the swap so the notification/media session
+      // are untouched; playback resumes on the current chunk once ready
+      withTTS {
+        applyConfig()
+        speakCurrentChunk()
+      }
+    }
+  }
+
+  private fun shutdownTTSInstance() {
+    interrupt()
+    tts?.shutdown()
+    tts = null
+    ttsReady = false
+    pendingOnReady = null
+    ttsGeneration++ // invalidate any init still in flight
+  }
+
   // ---------------------------------------------------------------- internal
 
-  override fun onInit(status: Int) {
+  private fun createTTS() {
+    val generation = ++ttsGeneration
+    val initListener = TextToSpeech.OnInitListener { status -> handleTTSInit(generation, status) }
+    tts = if (enginePackage.isEmpty()) TextToSpeech(context, initListener)
+          else TextToSpeech(context, initListener, enginePackage)
+  }
+
+  private fun handleTTSInit(generation: Int, status: Int) {
     mainHandler.post {
+      // Init of an instance that was already replaced (engine switched mid-init)
+      if (generation != ttsGeneration) return@post
       if (status == TextToSpeech.SUCCESS) {
         Log.d(tag, "TextToSpeech engine ready")
         ttsReady = true
@@ -307,7 +367,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
     }
     pendingOnReady = block
     if (tts == null) {
-      tts = TextToSpeech(context, this)
+      createTTS()
     }
   }
 
@@ -318,6 +378,16 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) : TextToSp
     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
       Log.w(tag, "Language $language not supported by the TTS engine")
       listener.onTTSError("Language $language is not supported")
+    }
+    if (voiceName.isNotEmpty()) {
+      // Broken engines can throw from the voices getter
+      val voice = try { engine.voices } catch (e: Exception) { null }?.find { it.name == voiceName }
+      if (voice != null) {
+        engine.setVoice(voice)
+      } else {
+        // Silent fallback - setLanguage above already selected a working default
+        Log.w(tag, "Voice $voiceName not found, using language default")
+      }
     }
   }
 

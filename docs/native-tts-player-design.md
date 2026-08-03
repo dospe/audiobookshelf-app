@@ -433,6 +433,27 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     objeví i v „Recent“ — police nedávno přidaných nabízí epub položky
     jako `ebook__` (předčítání), ostatní formáty skryje
   - **ověření na DHU zatím neproběhlo**
+- [x] Výběr TTS enginu a hlasu:
+  - Nové plugin metody `getEngines`, `getVoices({ engine, language })`,
+    `setEngine`, `setVoice` a `openTTSSettings` (systémová obrazovka
+    `com.android.settings.TTS_SETTINGS`); enumerace přes krátkodobou
+    `TextToSpeech` instanci vlastněnou pluginem (resolve až z init
+    callbacku, funguje bez připravené knihy)
+  - `TTSPlaybackEngine`: pole `enginePackage`/`voiceName`, hlas se aplikuje
+    v `applyConfig()` (chybějící hlas = tichý fallback na default jazyka);
+    výměna enginu vyžaduje shutdown + novou instanci (`reinitTTS`) — stav
+    zůstává PLAYING, generační čítač `ttsGeneration` zahazuje init callbacky
+    vyměněných instancí
+  - `TTSBook` nese `ttsEngine`/`voice` (null = zachovat aktuální);
+    volby přicházejí v `prepareBook` payloadu a persistují v TTS cache
+  - UI: dialog `TtsSettingsDialog.vue` (ikona tune v TTS liště + řádek
+    v nastavení čtečky); klíče `ttsEngine` a `ttsVoices` (mapa per jazyk)
+    v `ereaderSettings`; web fallback umí jen hlas (číselný index do
+    `getSupportedVoices()`, resolvuje se čerstvě), výběr enginu se skryje
+  - Limitace: studený start z Android Auto u knihy nikdy nepuštěné ze
+    čtečky použije poslední aplikovaný engine a výchozí hlas (per-jazyk
+    hlas žije ve WebView localStorage, stejné omezení jako
+    `ttsLanguageForBook`)
 - [ ] F3/F4: iOS engine, CarPlay — **odloženo na neurčito** (není iPhone
   na testování)
 
