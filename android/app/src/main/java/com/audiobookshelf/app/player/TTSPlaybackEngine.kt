@@ -177,6 +177,14 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
   }
 
   fun prepare(newBook: TTSBook) {
+    // Preparing a different book while a session is active ends that session
+    // first, while `book` still points at the old one: the STOPPED transition
+    // syncs the old book's final progress and resets the notification/media
+    // session, and the play() that follows raises PLAYING again so the
+    // service and the client both see the book switch
+    if (state != TTSState.STOPPED && book?.libraryItemId != newBook.libraryItemId) {
+      stop()
+    }
     interrupt()
     book = newBook
     language = newBook.language
