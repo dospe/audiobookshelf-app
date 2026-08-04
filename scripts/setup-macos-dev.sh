@@ -10,18 +10,19 @@
 #   - Android command line tools + SDK (platform-tools, API 35, build-tools 35)
 #   - Android emulator + API 35 system image + a ready-to-use AVD
 #     (skip with SKIP_EMULATOR=1)
-#   - iOS toolchain: CocoaPods (requires full Xcode from the App Store;
-#     the script detects it and skips iOS with a warning when missing)
 #   - project npm dependencies, web asset build and Capacitor sync
 #
-# Android Studio is NOT installed by default (any editor + the command line
-# workflow below is enough). Opt in with INSTALL_ANDROID_STUDIO=1.
+# Development currently targets Android only, so the iOS toolchain
+# (full Xcode + CocoaPods) is NOT set up by default - opt in with SETUP_IOS=1.
+# Android Studio is NOT installed by default either (any editor + the command
+# line workflow below is enough). Opt in with INSTALL_ANDROID_STUDIO=1.
 #
 # The script is idempotent - safe to re-run.
 #
 # Usage: ./scripts/setup-macos-dev.sh
 #        SKIP_EMULATOR=1 ./scripts/setup-macos-dev.sh
 #        INSTALL_ANDROID_STUDIO=1 ./scripts/setup-macos-dev.sh
+#        SETUP_IOS=1 ./scripts/setup-macos-dev.sh
 
 set -euo pipefail
 
@@ -120,18 +121,22 @@ if [[ ! -f "$REPO_DIR/android/local.properties" ]]; then
 fi
 
 # ---------------------------------------------------------------- iOS toolchain
-# Capacitor 7 needs full Xcode 16+ (App Store), not just the Command Line Tools.
+# Off by default - development currently targets Android only. SETUP_IOS=1
+# opts in; Capacitor 7 then needs full Xcode 16+ (App Store), not just the
+# Command Line Tools.
 HAS_XCODE=0
-XCODE_DEV_DIR="$(xcode-select -p 2>/dev/null || true)"
-if [[ "$XCODE_DEV_DIR" == *"Xcode"*.app* ]] && command -v xcodebuild >/dev/null 2>&1; then
-  HAS_XCODE=1
-  log "Xcode found: $(xcodebuild -version | head -1)"
-  log "Installing CocoaPods"
-  brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
-else
-  warn "Full Xcode not found (only Command Line Tools or nothing) - skipping the iOS toolchain."
-  warn "Install Xcode from the App Store, run 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer',"
-  warn "accept the license with 'sudo xcodebuild -license accept', then re-run this script."
+if [[ "${SETUP_IOS:-0}" == "1" ]]; then
+  XCODE_DEV_DIR="$(xcode-select -p 2>/dev/null || true)"
+  if [[ "$XCODE_DEV_DIR" == *"Xcode"*.app* ]] && command -v xcodebuild >/dev/null 2>&1; then
+    HAS_XCODE=1
+    log "Xcode found: $(xcodebuild -version | head -1)"
+    log "Installing CocoaPods"
+    brew list cocoapods >/dev/null 2>&1 || brew install cocoapods
+  else
+    warn "SETUP_IOS=1 but full Xcode not found (only Command Line Tools or nothing) - skipping iOS."
+    warn "Install Xcode from the App Store, run 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer',"
+    warn "accept the license with 'sudo xcodebuild -license accept', then re-run with SETUP_IOS=1."
+  fi
 fi
 
 # ---------------------------------------------------------------- shell env
@@ -185,8 +190,8 @@ Android - emulator / live reload:
   npx cap run android             # pick the emulator or a USB device
   npm run dev & npx cap run android -l --external    # live reload
 
-iOS (requires full Xcode):
-  npx cap open ios                # build & run from Xcode
+iOS toolchain is not set up by default (Android-only development);
+re-run with SETUP_IOS=1 once there is a way to test on iOS.
 
 Android Studio was not installed (INSTALL_ANDROID_STUDIO=1 to add it);
 open the android/ folder in it if you prefer, or just use your editor
