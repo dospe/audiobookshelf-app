@@ -234,18 +234,31 @@ export default {
     resumeTTS() {
       if (this.ttsState !== 'paused') return
       if (this.ttsUseNative()) {
-        AbsTTSPlayer.play({}).catch(() => {})
+        this.resumeNativeTTS()
         return
       }
       this.ttsState = 'playing'
       this.$emit('tts-state', 'playing')
       this.speakNextChunk()
     },
+    async resumeNativeTTS() {
+      // The native session can belong to another book by now (started from
+      // another reader or from Android Auto) - resuming would speak that book,
+      // so only resume this book's session and otherwise start fresh
+      const state = await AbsTTSPlayer.getState().catch(() => null)
+      if (state?.libraryItemId && state.libraryItemId === this.libraryItem?.id) {
+        AbsTTSPlayer.play({}).catch(() => {})
+      } else {
+        this.startTTS()
+      }
+    },
     stopTTS() {
       const wasActive = this.ttsState !== 'stopped'
       this.ttsState = 'stopped'
       if (this.ttsUseNative()) {
-        AbsTTSPlayer.stop().catch(() => {})
+        // Only a reader attached to the session (state synced via listeners)
+        // stops it - never a background session of another book
+        if (wasActive) AbsTTSPlayer.stop().catch(() => {})
         this.ttsRemoveNativeListeners()
         if (wasActive) this.$emit('tts-state', 'stopped')
         return
@@ -384,10 +397,12 @@ export default {
   },
   async mounted() {
     // Re-sync with a native TTS session that kept playing in the background
-    // after the reader was closed
+    // after the reader was closed - only when it is this book's session. A
+    // session of another book must not be adopted, otherwise the play button
+    // resumes that book instead of starting this one.
     if (this.ttsUseNative()) {
       const state = await AbsTTSPlayer.getState().catch(() => null)
-      if (state?.state && state.state !== 'stopped') {
+      if (state?.state && state.state !== 'stopped' && state.libraryItemId && state.libraryItemId === this.libraryItem?.id) {
         await this.ttsRegisterNativeListeners()
         this.ttsState = state.state
         this.$emit('tts-state', state.state)
