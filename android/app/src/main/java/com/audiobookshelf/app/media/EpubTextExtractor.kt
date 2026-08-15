@@ -18,11 +18,11 @@ import java.util.zip.ZipFile
  * (the reader ttsExtractBook hooks need the app in the foreground).
  *
  * Produces the same chapter/paragraph shape as the JS extraction: one chapter
- * per linear spine item (startLocation = spine href, used by the reader to
- * resume near the spoken position), paragraphs from block-level text elements.
- * Paragraph CFIs need the rendered DOM, so locations stay null - progress
- * falls back to the chapter href and the character ratio, which both the
- * reader resume and the TTS resume already handle.
+ * per linear spine item (startLocation = spine href, startCfi = the same
+ * position as an epub cfi), paragraphs from block-level text elements.
+ * Paragraph CFIs need the rendered DOM, so paragraph locations stay null -
+ * saved progress falls back to the chapter cfi and the character ratio, which
+ * both the reader resume and the TTS resume handle.
  *
  * Content documents are intentionally not parsed as XML: real-world EPUBs
  * contain undeclared entities and other XML violations, so text is pulled out
@@ -44,12 +44,19 @@ object EpubTextExtractor {
     val title: String?,
     val author: String?,
     val language: String?,
-    /** Spine hrefs (relative to the OPF) of linear content documents, in reading order */
-    val spineHrefs: List<String>,
+    /** Linear content documents of the spine, in reading order */
+    val spineItems: List<SpineItem>,
     /** Nav document href (EPUB 3), relative to the OPF */
     val navHref: String?,
     /** NCX href (EPUB 2), relative to the OPF */
     val ncxHref: String?
+  )
+
+  private data class SpineItem(
+    /** Href relative to the OPF */
+    val href: String,
+    /** Chapter start as an epub cfi, null when the OPF structure was unexpected */
+    val startCfi: String?
   )
 
   class EpubParseException(message: String) : Exception(message)
@@ -63,14 +70,14 @@ object EpubTextExtractor {
       val opfXml = readEntryText(zip, opfPath)
         ?: throw EpubParseException("Missing OPF file $opfPath")
       val opf = parseOpf(opfXml, opfPath)
-      if (opf.spineHrefs.isEmpty()) throw EpubParseException("Empty spine in $opfPath")
+      if (opf.spineItems.isEmpty()) throw EpubParseException("Empty spine in $opfPath")
 
       // Chapter titles from the toc, keyed by the resolved zip path of the target
       val tocTitles = parseTocTitles(zip, opf)
 
       val chapters = mutableListOf<TTSChapter>()
-      opf.spineHrefs.forEach { href ->
-        val entryPath = resolvePath(opf.baseDir, href)
+      opf.spineItems.forEach { spineItem ->
+        val entryPath = resolvePath(opf.baseDir, spineItem.href)
         val html = readEntryText(zip, entryPath)
         if (html == null) {
           Log.w(tag, "Spine entry not found in zip: $entryPath")
@@ -81,8 +88,9 @@ object EpubTextExtractor {
         chapters.add(
           TTSChapter(
             title = tocTitles[entryPath] ?: "",
-            startLocation = href,
-            paragraphs = paragraphs.map { TTSParagraph(it, null, it.length) }.toMutableList()
+            startLocation = spineItem.href,
+            paragraphs = paragraphs.map { TTSParagraph(it, null, it.length) }.toMutableList(),
+            startCfi = spineItem.startCfi
           )
         )
       }
@@ -113,9 +121,19 @@ object EpubTextExtractor {
     var navId: String? = null
     var ncxId: String? = null
     var spineTocId: String? = null
-    val spineIdRefs = mutableListOf<String>()
+    // Every itemref, linear or not - the cfi spine step counts them all
+    val spineIdRefs = mutableListOf<Pair<String?, Boolean>>()
+    // Element index of <spine> among the children of <package>, for the cfi
+    // spine step (metadata, manifest, spine = 2 in a conventional OPF)
+    var spineNodeIndex = -1
+    var packageChildIndex = -1
 
     forEachXmlTag(opfXml) { parser ->
+      // Depth 1 is <package>, so its element children are at depth 2
+      if (parser.depth == 2) {
+        packageChildIndex++
+        if (parser.name.substringAfter(':') == "spine") spineNodeIndex = packageChildIndex
+      }
       when (parser.name.substringAfter(':')) {
         // Metadata (dc: prefixed); the first occurrence wins
         "title" -> if (title == null) title = parser.nextText().trim().ifEmpty { null }
@@ -137,17 +155,18 @@ object EpubTextExtractor {
         "itemref" -> {
           val idref = parser.getAttributeValue(null, "idref")
           val linear = parser.getAttributeValue(null, "linear")
-          if (idref != null && linear != "no") spineIdRefs.add(idref)
+          spineIdRefs.add(Pair(idref, linear != "no"))
         }
       }
     }
 
-    val spineHrefs = spineIdRefs.mapNotNull { idref ->
-      val href = manifestHrefById[idref] ?: return@mapNotNull null
+    val spineItems = spineIdRefs.mapIndexedNotNull { spineIndex, (idref, isLinear) ->
+      if (idref == null || !isLinear) return@mapIndexedNotNull null
+      val href = manifestHrefById[idref] ?: return@mapIndexedNotNull null
       // Spine can reference non-text resources; only content documents are speakable
       val mediaType = manifestMediaTypeById[idref] ?: ""
-      if (mediaType.isNotEmpty() && !mediaType.contains("html") && !mediaType.contains("xml")) return@mapNotNull null
-      href
+      if (mediaType.isNotEmpty() && !mediaType.contains("html") && !mediaType.contains("xml")) return@mapIndexedNotNull null
+      SpineItem(href, chapterCfi(spineNodeIndex, spineIndex, idref))
     }
 
     return OpfData(
@@ -155,10 +174,24 @@ object EpubTextExtractor {
       title = title,
       author = author,
       language = language,
-      spineHrefs = spineHrefs,
+      spineItems = spineItems,
       navHref = navId?.let { manifestHrefById[it] },
       ncxHref = (spineTocId ?: ncxId)?.let { manifestHrefById[it] }
     )
+  }
+
+  /**
+   * Chapter start as an epub cfi, in the same shape epubjs builds for a spine
+   * item: the spine step in the OPF, the itemref step, then the body of the
+   * content document. Every cfi step is (element index + 1) * 2.
+   *
+   * Chapter granularity is all the native extraction can offer (paragraph cfis
+   * need the rendered DOM), but a cfi is understood by every ebook reader,
+   * while a bare spine href is not.
+   */
+  private fun chapterCfi(spineNodeIndex: Int, spineIndex: Int, idref: String): String? {
+    if (spineNodeIndex < 0) return null
+    return "epubcfi(/${(spineNodeIndex + 1) * 2}/${(spineIndex + 1) * 2}[$idref]!/4)"
   }
 
   /** Map of resolved zip path -> chapter title, from the EPUB 3 nav doc or the EPUB 2 NCX */

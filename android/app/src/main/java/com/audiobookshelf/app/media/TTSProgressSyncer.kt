@@ -80,10 +80,14 @@ class TTSProgressSyncer(
     val book = engine.book ?: return
 
     // Paragraphs without a location fall back to the chapter start so the
-    // reader can still return close to the spoken position
+    // reader can still return close to the spoken position: the chapter cfi
+    // when the extraction built one (the format every ebook reader resumes
+    // from), the raw chapter href only as a last resort
+    val chapter = book.chapters.getOrNull(engine.chapterIndex)
     val location =
-            engine.currentLocation
-                    ?: book.chapters.getOrNull(engine.chapterIndex)?.startLocation
+            engine.currentLocation?.ifEmpty { null }
+                    ?: chapter?.startCfi?.ifEmpty { null }
+                    ?: chapter?.startLocation?.ifEmpty { null }
     val progress = engine.progress
     val lastUpdate = System.currentTimeMillis()
 
@@ -152,7 +156,9 @@ class TTSProgressSyncer(
                       episodeId = null
               )
     } else {
-      localMediaProgress.updateEbookProgress(location ?: localMediaProgress.ebookLocation ?: "", progress)
+      // Without a location for the spoken position the stored one is kept -
+      // clearing it would restart the reader at the beginning of the book
+      localMediaProgress.updateEbookProgress(location ?: localMediaProgress.ebookLocation, progress)
     }
 
     DeviceManager.dbManager.saveLocalMediaProgress(localMediaProgress)

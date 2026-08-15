@@ -141,6 +141,16 @@ class EpubTextExtractorTest {
   }
 
   @Test
+  fun buildsChapterStartCfis() {
+    withTestEpub { extracted ->
+      // /6 = spine is the third child of package, /4 and /6 = second and third
+      // itemref (the skipped non-linear cover still counts), !/4 = body
+      assertEquals("epubcfi(/6/4[ch1]!/4)", extracted.chapters[0].startCfi)
+      assertEquals("epubcfi(/6/6[ch2]!/4)", extracted.chapters[1].startCfi)
+    }
+  }
+
+  @Test
   fun extractsParagraphsWithEntitiesAndWhitespaceNormalized() {
     withTestEpub { extracted ->
       val texts = extracted.chapters[0].paragraphs.map { it.text }

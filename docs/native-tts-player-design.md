@@ -79,7 +79,8 @@ interface TTSBook {
 
 interface TTSChapter {
   title: string
-  startLocation: string        // epub cfi / pdf stránka / mobi anchor – pro návrat čtečky
+  startLocation: string        // epub spine href / pdf stránka / mobi anchor
+  startCfi?: string            // začátek kapitoly jako epub cfi – fallback pozice pro čtečku
   paragraphs: TTSParagraph[]
 }
 
@@ -349,6 +350,14 @@ Po každém odstavci engine spočítá `ebookLocation` (location odstavce) a
 stejně jako `updateLocalEbookProgress`) a na server `PATCH /api/me/progress/:id`
 — **throttling 15 s** jako u audia (`MediaProgressSyncer` vzor). Formát je
 identický s tím, co ukládá čtečka → obousměrná návaznost čtení/poslech.
+
+Odstavec bez vlastní location (nativní extrakce epubu — cfi odstavců potřebuje
+vyrenderovaný DOM) se ukládá jako `startCfi` kapitoly, tedy pořád jako platné
+epub cfi; holý spine href je až poslední možnost. Bez location se stará
+`ebookLocation` **nepřepisuje** — prázdná hodnota by čtečku vrátila na začátek
+knihy. Čtečka epubu pak pozici řeší v tomto pořadí: cfi odstavce → kapitola
+(cfi kapitoly nebo spine href) zpřesněná poměrem znaků z `ebookProgress`, pokud
+padne do stejné kapitoly → samotný poměr znaků (`locations.cfiFromPercentage`).
 
 ### A.7 Pravidla fallbacku v JS
 

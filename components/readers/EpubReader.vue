@@ -98,12 +98,23 @@ export default {
     localStorageLocationsKey() {
       return `ebookLocations-${this.libraryItemId}`
     },
+    /**
+     * Saved reading position. Usually an epubcfi, but read aloud falls back to
+     * the start of the spoken chapter when the extraction produced no cfi for
+     * the paragraph, so a spine href is a valid saved location too.
+     * @returns {string|null}
+     */
     savedEbookLocation() {
       if (!this.keepProgress) return null
       if (!this.userItemProgress?.ebookLocation) return null
-      // Validate ebookLocation is an epubcfi
-      if (!String(this.userItemProgress.ebookLocation).startsWith('epubcfi')) return null
-      return this.userItemProgress.ebookLocation
+      return String(this.userItemProgress.ebookLocation)
+    },
+    /** @returns {number} saved position as a ratio of the whole book, 0 when there is none */
+    savedEbookProgress() {
+      if (!this.keepProgress) return 0
+      const progress = Number(this.userItemProgress?.ebookProgress)
+      if (isNaN(progress) || progress <= 0 || progress >= 1) return 0
+      return progress
     },
     isLightTheme() {
       return this.ereaderSettings.theme === 'light'
@@ -261,6 +272,8 @@ export default {
           chapters.push({
             title: tocTitles[(section.href || '').split('#')[0]] || '',
             startLocation: section.href || '',
+            // Fallback saved position for paragraphs whose cfi could not be built
+            startCfi: section.cfiBase ? `epubcfi(${section.cfiBase}!/4)` : null,
             paragraphs
           })
         } catch (error) {
@@ -413,6 +426,79 @@ export default {
 
       return locationsObject.locations
     },
+    /** Generate the cfi locations used by the location counter and by progress based resume */
+    generateLocations() {
+      return this.book.locations
+        .generate(100)
+        .then(() => {
+          this.totalLocations = this.book.locations.length()
+          this.currentLocationNum = this.rendition.currentLocation()?.start?.location || 0
+          this.checkSaveLocations(this.book.locations.save())
+        })
+        .catch((error) => {
+          console.error('[EpubReader] Failed to generate locations', error)
+        })
+    },
+    /**
+     * Spine section a saved location points into, null when it resolves to none
+     * @param {string} location - cfi or spine href
+     * @returns {ePub.Section|null}
+     */
+    getSpineSection(location) {
+      try {
+        return this.book.spine.get(location) || null
+      } catch (error) {
+        console.error(`[EpubReader] Invalid saved location ${location}`, error)
+        return null
+      }
+    },
+    /** @returns {string|null} cfi for the saved character ratio, needs the locations generated */
+    cfiFromSavedProgress() {
+      if (!this.savedEbookProgress || !this.book?.locations?.length()) return null
+      try {
+        // epubjs answers with -1 when the ratio maps outside the locations
+        const cfi = this.book.locations.cfiFromPercentage(this.savedEbookProgress)
+        return typeof cfi === 'string' && cfi.startsWith('epubcfi') ? cfi : null
+      } catch (error) {
+        console.error('[EpubReader] Failed to map the saved progress to a cfi', error)
+        return null
+      }
+    },
+    /**
+     * A spine href or a cfi with no path inside the section only locates the
+     * chapter, not the position in it - read aloud saves those when the
+     * extraction produced no paragraph cfis
+     * @param {string} location
+     */
+    isChapterGranularityLocation(location) {
+      if (!location.startsWith('epubcfi')) return true
+      try {
+        return (new EpubCFI(location).path?.steps?.length || 0) <= 1
+      } catch (error) {
+        return false
+      }
+    },
+    /**
+     * Where to open the book, most precise saved position first:
+     * 1. the cfi saved by the reader or by read aloud following paragraph cfis
+     * 2. the chapter saved by read aloud without paragraph cfis, refined with
+     *    the character ratio when that lands in the same chapter
+     * 3. the character ratio on its own
+     * @returns {string|null} cfi or spine href to display, null to start at the beginning
+     */
+    getDisplayTarget() {
+      const savedLocation = this.savedEbookLocation
+      // A library item can hold ebook files of several formats sharing one
+      // progress - a page number saved by the pdf reader is no spine target
+      const isEpubLocation = savedLocation && (savedLocation.startsWith('epubcfi') || isNaN(savedLocation))
+      const section = isEpubLocation ? this.getSpineSection(savedLocation) : null
+      if (!section) return this.cfiFromSavedProgress()
+      if (!this.isChapterGranularityLocation(savedLocation)) return savedLocation
+
+      const progressCfi = this.cfiFromSavedProgress()
+      if (progressCfi && this.getSpineSection(progressCfi)?.index === section.index) return progressCfi
+      return savedLocation
+    },
     /** @param {string} location - CFI of the new location */
     relocated(location) {
       console.log(`[EpubReader] relocated ${location.start.cfi}`)
@@ -478,12 +564,24 @@ export default {
         flow: 'paginated'
       })
 
-      reader.book.ready.then(() => {
+      reader.book.ready.then(async () => {
         console.log('%c [EpubReader] Book ready', 'color:cyan;')
 
-        let displayCfi = reader.book.locations.start
-        if (this.savedEbookLocation && reader.book.spine.get(this.savedEbookLocation)) {
-          displayCfi = this.savedEbookLocation
+        // Load the cached cfi locations first - resuming from a saved
+        // character ratio needs them
+        const savedLocations = this.loadLocations()
+        if (savedLocations) {
+          reader.book.locations.load(savedLocations)
+          this.totalLocations = reader.book.locations.length()
+        }
+
+        let displayCfi = this.getDisplayTarget()
+        if (!displayCfi && this.savedEbookProgress && !reader.book.locations.length()) {
+          // Only the character ratio of the saved progress is usable (read
+          // aloud extraction without cfis) - generating the locations maps it
+          // to a position, worth the wait to not restart the book
+          await this.generateLocations()
+          displayCfi = this.getDisplayTarget()
         }
         // Some epubs have spine entries referencing missing manifest items
         // (e.g. a dangling cover page). Displaying those fails and leaves the
@@ -523,17 +621,9 @@ export default {
           this.$emit('touchend', event)
         })
 
-        // load ebook cfi locations
-        const savedLocations = this.loadLocations()
-        if (savedLocations) {
-          reader.book.locations.load(savedLocations)
-          this.totalLocations = reader.book.locations.length()
-        } else {
-          reader.book.locations.generate(100).then(() => {
-            this.totalLocations = reader.book.locations.length()
-            this.currentLocationNum = reader.rendition.currentLocation()?.start.location || 0
-            this.checkSaveLocations(reader.book.locations.save())
-          })
+        // Locations not cached and not needed for the display target above
+        if (!reader.book.locations.length()) {
+          this.generateLocations()
         }
 
         // TODO: To get the correct page need to render twice. On book ready and after first display. Figure out why
