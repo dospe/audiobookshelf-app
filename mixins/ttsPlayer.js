@@ -27,8 +27,8 @@ import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/Ab
  * implementing these additional hooks:
  *
  *   ttsExtractBook() -> { ebookFormat, chapters } | Promise
- *     Full book text: chapters with { title, startLocation, paragraphs },
- *     paragraph { text, location, chars }.
+ *     Full book text: chapters with { title, startLocation, startCfi,
+ *     paragraphs }, paragraph { text, location, chars }.
  *   ttsNativeStartPosition(book) -> { chapterIndex, paragraphIndex } (optional)
  *     Where to start based on the current reading position.
  *   ttsNativeFollow(event) (optional)
@@ -137,6 +137,7 @@ export default {
       const chapters = (extracted.chapters || []).map((chapter) => ({
         title: chapter.title || '',
         startLocation: chapter.startLocation || '',
+        startCfi: chapter.startCfi || null,
         paragraphs: (chapter.paragraphs || []).map((p) => ({
           text: p.text,
           location: p.location || null,

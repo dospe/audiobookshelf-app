@@ -68,7 +68,13 @@ data class TTSBook(
 data class TTSChapter(
   var title: String?,
   var startLocation: String?,
-  var paragraphs: MutableList<TTSParagraph>
+  var paragraphs: MutableList<TTSParagraph>,
+  /**
+   * Chapter start as an epub cfi, when the extraction could build one. Saved as
+   * the reading position for paragraphs without their own cfi - unlike the
+   * spine href in [startLocation] every ebook reader can resume from it.
+   */
+  var startCfi: String? = null
 ) {
   constructor() : this(null, null, mutableListOf())
 }

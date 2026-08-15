@@ -61,7 +61,7 @@ class LocalMediaProgress(
   }
 
   @JsonIgnore
-  fun updateEbookProgress(ebookLocation:String, ebookProgress:Double) {
+  fun updateEbookProgress(ebookLocation:String?, ebookProgress:Double) {
     lastUpdate = System.currentTimeMillis()
     this.ebookProgress = ebookProgress
     this.ebookLocation = ebookLocation
