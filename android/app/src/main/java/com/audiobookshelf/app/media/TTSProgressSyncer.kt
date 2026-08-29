@@ -176,6 +176,9 @@ class TTSProgressSyncer(
     apiHandler.updateEbookProgress(libraryItemId, location, progress, lastUpdate) { success, errorMsg ->
       if (success) {
         lastServerSyncTime = System.currentTimeMillis()
+        // Keep the progress Android Auto browses and resumes from in step with
+        // what was just saved, without waiting for the next refresh
+        playerNotificationService.mediaManager.updateServerEbookProgress(libraryItemId, location, progress, lastUpdate)
         AbsLogger.info(tag, "sync: Synced TTS ebook progress $progress for item \"$libraryItemId\"")
       } else {
         // Keep dirty so the next tick retries with the latest position

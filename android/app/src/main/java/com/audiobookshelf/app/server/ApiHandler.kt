@@ -666,16 +666,21 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
-  fun getAllItemsInProgress(cb: (List<ItemInProgress>) -> Unit) {
+  /** [cb] gets null when the request failed - an empty list means nothing is in progress */
+  fun getAllItemsInProgress(cb: (List<ItemInProgress>?) -> Unit) {
     getRequest("/api/me/items-in-progress", null, null) {
+      if (!it.getString("error").isNullOrEmpty() || !it.has("libraryItems")) {
+        Log.e(tag, "getAllItemsInProgress: Failed to get items in progress")
+        cb(null)
+        return@getRequest
+      }
+
       val items = mutableListOf<ItemInProgress>()
-      if (it.has("libraryItems")) {
-        val array = it.getJSONArray("libraryItems")
-        for (i in 0 until array.length()) {
-          val jsobj = array.get(i) as JSONObject
-          val itemInProgress = ItemInProgress.makeFromServerObject(jsobj, jacksonMapper)
-          items.add(itemInProgress)
-        }
+      val array = it.getJSONArray("libraryItems")
+      for (i in 0 until array.length()) {
+        val jsobj = array.get(i) as JSONObject
+        val itemInProgress = ItemInProgress.makeFromServerObject(jsobj, jacksonMapper)
+        items.add(itemInProgress)
       }
       cb(items)
     }
