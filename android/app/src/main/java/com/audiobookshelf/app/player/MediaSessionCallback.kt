@@ -87,9 +87,10 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     playerNotificationService.pause()
   }
 
+  // Read aloud: previous/next skip by the pages configured in the reader settings
   override fun onSkipToPrevious() {
     activeTTSEngine()?.let {
-      it.seekChapter(-1)
+      it.seekPages(-1)
       return
     }
     playerNotificationService.skipToPrevious()
@@ -97,7 +98,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onSkipToNext() {
     activeTTSEngine()?.let {
-      it.seekChapter(1)
+      it.seekPages(1)
       return
     }
     playerNotificationService.skipToNext()

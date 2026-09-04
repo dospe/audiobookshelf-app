@@ -28,27 +28,41 @@
     <component v-if="readerComponentName" ref="readerComponent" :is="readerComponentName" :url="ebookUrl" :library-item="selectedLibraryItem" :is-local="isLocal" :keep-progress="keepProgress" :showing-toolbar="showingToolbar" @touchstart="touchstart" @touchend="touchend" @loaded="readerLoaded" @hook:mounted="readerMounted" @tts-state="ttsStateChanged" />
 
     <!-- read aloud (TTS) bar -->
-    <div v-if="showTTSBar && ttsAvailable" class="fixed left-0 w-full z-30 px-4 py-2 flex items-center bg-bg text-fg" :style="{ bottom: ttsBarBottom, boxShadow: '0px -8px 8px #11111155' }" @touchstart.stop @mousedown.stop @touchend.stop @mouseup.stop>
-      <button type="button" :aria-label="$strings.ButtonPlay" class="inline-flex mx-1" @click.stop="clickTTSPlayPause">
-        <span class="material-symbols fill text-4xl text-fg">{{ ttsState === 'playing' ? 'pause_circle' : 'play_circle' }}</span>
-      </button>
-      <button type="button" :aria-label="$strings.ButtonStop" class="inline-flex mx-1" :class="ttsState === 'stopped' ? 'opacity-40' : ''" :disabled="ttsState === 'stopped'" @click.stop="clickTTSStop">
-        <span class="material-symbols text-4xl text-fg">stop</span>
-      </button>
-      <div class="flex-grow" />
-      <ui-toggle-btns v-model="ereaderSettings.ttsLanguage" name="tts-language" :items="ttsLanguageItems" @input="settingsUpdated" />
-      <div class="flex items-center ml-3">
-        <button type="button" class="inline-flex" @click.stop="setTTSRate(-0.25)">
-          <span class="material-symbols text-2xl text-fg">remove</span>
-        </button>
-        <p class="text-sm w-10 text-center">{{ ereaderSettings.ttsRate }}×</p>
-        <button type="button" class="inline-flex" @click.stop="setTTSRate(0.25)">
-          <span class="material-symbols text-2xl text-fg">add</span>
+    <!-- Playback controls sit on the side set in the reader settings so they stay under the thumb when holding the phone one-handed -->
+    <div v-if="showTTSBar && ttsAvailable" class="fixed left-0 w-full z-30 px-3 py-2 flex flex-col bg-bg text-fg" :style="{ bottom: ttsBarBottom, boxShadow: '0px -8px 8px #11111155' }" @touchstart.stop @mousedown.stop @touchend.stop @mouseup.stop>
+      <!-- Language, rate and voice settings; mirrored so they stay away from the playback controls -->
+      <div class="flex items-center mb-1" :class="ttsControlsOnRight ? '' : 'flex-row-reverse'">
+        <ui-toggle-btns v-model="ereaderSettings.ttsLanguage" name="tts-language" :items="ttsLanguageItems" @input="settingsUpdated" />
+        <div class="flex items-center mx-3">
+          <button type="button" class="inline-flex" @click.stop="setTTSRate(-0.25)">
+            <span class="material-symbols text-2xl text-fg">remove</span>
+          </button>
+          <p class="text-sm w-10 text-center">{{ ereaderSettings.ttsRate }}×</p>
+          <button type="button" class="inline-flex" @click.stop="setTTSRate(0.25)">
+            <span class="material-symbols text-2xl text-fg">add</span>
+          </button>
+        </div>
+        <button type="button" :aria-label="$strings.HeaderReadAloudSettings" class="inline-flex" @click.stop="showTTSSettingsDialog = true">
+          <span class="material-symbols text-2xl text-fg">tune</span>
         </button>
       </div>
-      <button type="button" :aria-label="$strings.HeaderReadAloudSettings" class="inline-flex ml-3" @click.stop="showTTSSettingsDialog = true">
-        <span class="material-symbols text-2xl text-fg">tune</span>
-      </button>
+      <!-- Playback controls on the side set in the reader settings so they are under the thumb when holding the phone one-handed -->
+      <div class="flex items-center" :class="ttsControlsOnRight ? 'justify-end' : 'justify-start'">
+        <button type="button" :aria-label="$strings.ButtonSkipBack" class="inline-flex flex-col items-center mx-1" :class="ttsSkipInProgress ? 'opacity-40' : ''" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(-1)">
+          <span class="material-symbols text-4xl leading-none text-fg">fast_rewind</span>
+          <span class="text-[10px] font-semibold leading-tight">{{ ttsPageStep }}</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonPlay" class="inline-flex mx-1" @click.stop="clickTTSPlayPause">
+          <span class="material-symbols fill text-6xl leading-none text-fg">{{ ttsState === 'playing' ? 'pause_circle' : 'play_circle' }}</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonSkipForward" class="inline-flex flex-col items-center mx-1" :class="ttsSkipInProgress ? 'opacity-40' : ''" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(1)">
+          <span class="material-symbols text-4xl leading-none text-fg">fast_forward</span>
+          <span class="text-[10px] font-semibold leading-tight">{{ ttsPageStep }}</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonStop" class="inline-flex mx-1" :class="ttsState === 'stopped' ? 'opacity-40' : ''" :disabled="ttsState === 'stopped'" @click.stop="clickTTSStop">
+          <span class="material-symbols text-4xl leading-none text-fg">stop</span>
+        </button>
+      </div>
     </div>
 
     <!-- table of contents modal -->
@@ -147,9 +161,21 @@
             </div>
             <div v-if="ttsAvailable" class="flex items-center mb-6">
               <div class="w-32">
-                <p class="text-sm">{{ $strings.HeaderReadAloudSettings }}</p>
+                <p class="text-sm">{{ $strings.LabelReadAloudControlsSide }}</p>
               </div>
-              <ui-btn small @click="showTTSSettingsDialog = true">{{ $strings.LabelReadAloudVoice }}</ui-btn>
+              <ui-toggle-btns v-model="ereaderSettings.ttsControlsSide" name="tts-controls-side" :items="ttsControlsSideItems" @input="settingsUpdated" />
+            </div>
+            <div v-if="ttsAvailable" class="flex items-center mb-6">
+              <div class="w-32">
+                <p class="text-sm">{{ $strings.LabelReadAloudPageStep }}</p>
+              </div>
+              <ui-toggle-btns v-model="ereaderSettings.ttsPageStep" name="tts-page-step" :items="ttsPageStepItems" @input="settingsUpdated" />
+            </div>
+            <div v-if="ttsAvailable" class="flex items-center mb-6">
+              <div class="w-32">
+                <p class="text-sm">{{ $strings.LabelReadAloudVoice }}</p>
+              </div>
+              <ui-btn small @click="showTTSSettingsDialog = true">{{ $strings.HeaderReadAloudSettings }}</ui-btn>
             </div>
           </div>
         </div>
@@ -157,7 +183,7 @@
     </modals-fullscreen-modal>
 
     <!-- read aloud (TTS) engine/voice picker -->
-    <modals-tts-settings-dialog v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :is-native="isNativeTTS" @update:engine="setTTSEngine" @update:voice="setTTSVoice" />
+    <modals-tts-settings-dialog v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :controls-side="ereaderSettings.ttsControlsSide" :page-step="ttsPageStep" :is-native="isNativeTTS" @update:engine="setTTSEngine" @update:voice="setTTSVoice" @update:controlsSide="setTTSControlsSide" @update:pageStep="setTTSPageStep" />
   </div>
 </template>
 
@@ -182,6 +208,7 @@ export default {
       showTTSBar: false,
       showTTSSettingsDialog: false,
       ttsState: 'stopped',
+      ttsSkipInProgress: false,
       comicHasMetadata: false,
       chapters: [],
       isInittingWatchVolume: false,
@@ -198,7 +225,10 @@ export default {
         ttsLanguage: 'en-US',
         ttsRate: 1,
         ttsEngine: '',
-        ttsVoices: {}
+        ttsVoices: {},
+        // Read aloud bar: playback controls side ('left' | 'right') and pages per rewind/forward step
+        ttsControlsSide: 'right',
+        ttsPageStep: 3
       }
     }
   },
@@ -291,6 +321,28 @@ export default {
           value: 'en-US'
         }
       ]
+    },
+    ttsControlsOnRight() {
+      return this.ereaderSettings.ttsControlsSide !== 'left'
+    },
+    ttsPageStep() {
+      const step = parseInt(this.ereaderSettings.ttsPageStep)
+      return step > 0 ? step : 3
+    },
+    ttsControlsSideItems() {
+      return [
+        {
+          text: this.$strings.LabelLeft,
+          value: 'left'
+        },
+        {
+          text: this.$strings.LabelRight,
+          value: 'right'
+        }
+      ]
+    },
+    ttsPageStepItems() {
+      return [1, 2, 3, 5, 10].map((pages) => ({ text: String(pages), value: pages }))
     },
     ttsBarBottom() {
       const playerOffset = this.isPlayerOpen ? 120 : 0
@@ -473,6 +525,27 @@ export default {
     },
     clickTTSStop() {
       this.$refs.readerComponent?.stopTTS?.()
+    },
+    /** Rewind (-1) / forward (1) by the configured number of pages, keeping the read aloud position in sync */
+    async clickTTSSkip(direction) {
+      const reader = this.$refs.readerComponent
+      if (!reader?.ttsSkipPages || this.ttsSkipInProgress) return
+      this.ttsSkipInProgress = true
+      try {
+        await reader.ttsSkipPages(direction)
+      } finally {
+        this.ttsSkipInProgress = false
+      }
+    },
+    setTTSControlsSide(side) {
+      this.ereaderSettings.ttsControlsSide = side === 'left' ? 'left' : 'right'
+      this.settingsUpdated()
+    },
+    setTTSPageStep(pages) {
+      const step = parseInt(pages)
+      if (!(step > 0)) return
+      this.ereaderSettings.ttsPageStep = step
+      this.settingsUpdated()
     },
     setTTSEngine(engine) {
       this.ereaderSettings.ttsEngine = engine

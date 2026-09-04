@@ -21,9 +21,21 @@ data class TTSBook(
   var voice: String? = null,
   var ebookFormat: String,
   var chapters: MutableList<TTSChapter>,
-  var totalChars: Int
+  var totalChars: Int,
+  /**
+   * Page skips from the media session (notification, lock screen, Android
+   * Auto): pages per skip and the reader's estimate of characters on one
+   * displayed page (0 = unknown, the engine falls back to a default).
+   */
+  var pageStep: Int = DEFAULT_PAGE_STEP,
+  var pageChars: Int = 0
 ) {
   constructor() : this("", null, "", null, "en-US", 1f, null, null, "", mutableListOf(), 0)
+
+  companion object {
+    const val DEFAULT_PAGE_STEP = 3
+    const val DEFAULT_PAGE_CHARS = 1500
+  }
 
   /** Total characters before the given position, for progress and time estimates */
   fun charsBefore(chapterIndex: Int, paragraphIndex: Int): Int {

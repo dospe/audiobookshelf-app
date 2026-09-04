@@ -304,6 +304,27 @@ export default {
     ttsNativeFollow(event) {
       if (event.location) this.ttsFollowParagraph({ ref: event.location })
     },
+    /**
+     * TTS hook: characters on the visible page, from the generated cfi
+     * locations (100 characters each). 0 when the locations are not ready.
+     */
+    ttsEstimatePageChars() {
+      const location = this.rendition?.currentLocation()
+      const startLocation = location?.start?.location
+      const endLocation = location?.end?.location
+      if (!this.totalLocations || !(startLocation >= 0) || !(endLocation >= startLocation)) return 0
+      return (endLocation - startLocation + 1) * 100
+    },
+    /** TTS hook: turn pages for the rewind/forward buttons */
+    async ttsTurnPages(delta) {
+      if (!this.rendition) return
+      const pages = Math.abs(delta)
+      for (let i = 0; i < pages; i++) {
+        // Both resolve once the new page is displayed; at the ends of the book they are no-ops
+        if (delta < 0) await this.rendition.prev()
+        else await this.rendition.next()
+      }
+    },
     prev() {
       if (this.rendition) {
         this.rendition.prev()

@@ -33,6 +33,16 @@ import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/Ab
  *     Where to start based on the current reading position.
  *   ttsNativeFollow(event) (optional)
  *     Follow-along for onParagraph events { chapterIndex, paragraphIndex, location }.
+ *   ttsEstimatePageChars() -> Number (optional)
+ *     Characters on one displayed page, used by the native player to skip
+ *     by pages from the notification / lock screen / Android Auto.
+ *
+ * Skipping by pages (the read aloud bar rewind/forward buttons) uses:
+ *
+ *   ttsTurnPages(delta) -> Promise (optional)
+ *     Turn `delta` pages in the reader (negative = backwards). After the
+ *     turn the spoken position is moved to the first paragraph of the
+ *     visible page with the ttsStartIndex / ttsNativeStartPosition hooks.
  */
 export default {
   data() {
@@ -46,11 +56,16 @@ export default {
       // Resolved index into getSupportedVoices() for the web path; indices are
       // only stable within one snapshot so it is resolved fresh, never persisted
       ttsWebVoiceIndex: null,
+      // Book payload of the running native session, kept for page skips
+      ttsNativeBook: null,
+      // Set while a page skip is turning pages so follow-along does not turn them back
+      ttsSkipInProgress: false,
       ereaderSettings: {
         ttsLanguage: 'en-US',
         ttsRate: 1,
         ttsEngine: '',
-        ttsVoices: {}
+        ttsVoices: {},
+        ttsPageStep: 3
       }
     }
   },
@@ -69,9 +84,14 @@ export default {
       const oldVoice = this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || ''
       // A language or engine switch also switches the effective voice
       const voiceChanged = newVoice !== oldVoice || langChanged || engineChanged
-      if (!langChanged && !rateChanged && !engineChanged && !voiceChanged) return
+      const pageStepChanged = this.ttsPageStepOf(newSettings) !== this.ttsPageStepOf(this.ereaderSettings)
+      if (!langChanged && !rateChanged && !engineChanged && !voiceChanged && !pageStepChanged) return
 
       if (this.ttsUseNative()) {
+        if (pageStepChanged) {
+          AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(newSettings), pageChars: this.ttsEstimatePageChars?.() || 0 }).catch(() => {})
+        }
+        if (!langChanged && !rateChanged && !engineChanged && !voiceChanged) return
         // Order matters: the engine re-init clears the voice, setLanguage picks
         // a default the voice then overrides
         if (engineChanged) AbsTTSPlayer.setEngine({ engine: newSettings.ttsEngine || '' }).catch(() => {})
@@ -80,6 +100,9 @@ export default {
         if (voiceChanged) AbsTTSPlayer.setVoice({ voice: newVoice }).catch(() => {})
         return
       }
+
+      // The page step is read from the settings on every skip on the web path
+      if (!langChanged && !rateChanged && !engineChanged && !voiceChanged) return
 
       // Engine selection is not possible on the web path (no plugin API for it)
       this.ttsResolveWebVoiceIndex(newSettings).finally(() => {
@@ -122,6 +145,7 @@ export default {
       }
 
       const book = this.ttsBuildBookPayload(extracted)
+      this.ttsNativeBook = book
       await this.ttsRegisterNativeListeners()
 
       try {
@@ -157,7 +181,80 @@ export default {
         voice: this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || '',
         ebookFormat: extracted.ebookFormat || '',
         chapters,
-        totalChars
+        totalChars,
+        // Page skips from the media session (notification, Android Auto)
+        pageStep: this.ttsPageStepOf(this.ereaderSettings),
+        pageChars: this.ttsEstimatePageChars?.() || 0
+      }
+    },
+    /** @returns {number} pages per rewind/forward step from the settings */
+    ttsPageStepOf(settings) {
+      const step = parseInt(settings?.ttsPageStep)
+      return step > 0 ? step : 3
+    },
+    /**
+     * Rewind/forward by the configured number of pages: turn the pages in the
+     * reader and continue speaking from the first paragraph on the new page.
+     * @param {number} direction -1 backwards, 1 forward
+     */
+    async ttsSkipPages(direction) {
+      if (!this.ttsTurnPages || this.ttsSkipInProgress) return
+      const delta = (direction < 0 ? -1 : 1) * this.ttsPageStepOf(this.ereaderSettings)
+      this.ttsSkipInProgress = true
+      try {
+        await this.ttsTurnPages(delta)
+        if (this.ttsState !== 'stopped') {
+          await this.ttsSeekToVisiblePage()
+        }
+      } catch (error) {
+        console.error('[ttsPlayer] Failed to skip pages', error)
+      } finally {
+        this.ttsSkipInProgress = false
+      }
+    },
+    /** Move the spoken position to the first paragraph of the visible page */
+    async ttsSeekToVisiblePage() {
+      if (this.ttsUseNative()) {
+        if (!this.ttsNativeBook) {
+          // Reader re-attached to a background session - the payload is needed for the position
+          const extracted = await Promise.resolve(this.ttsExtractBook()).catch(() => null)
+          if (!extracted?.chapters?.length) return
+          this.ttsNativeBook = this.ttsBuildBookPayload(extracted)
+        }
+        const position = this.ttsNativeStartPosition?.(this.ttsNativeBook) || { chapterIndex: 0, paragraphIndex: 0 }
+        await AbsTTSPlayer.seekTo(position).catch((error) => {
+          console.error('[ttsPlayer] Native TTS seek failed', error)
+        })
+        return
+      }
+
+      const session = this.ttsSessionId
+      let paragraphs = await Promise.resolve(this.ttsCollectParagraphs()).catch(() => [])
+      if (session !== this.ttsSessionId || this.ttsState === 'stopped') return
+      let startIndex = 0
+      if (paragraphs?.length) {
+        startIndex = this.ttsStartIndex?.(paragraphs) || 0
+      } else if (this.ttsAdvanceUnit) {
+        // No readable text here (e.g. a scanned pdf page) - continue with the next unit that has some
+        paragraphs = await Promise.resolve(this.ttsAdvanceUnit()).catch(() => null)
+        if (session !== this.ttsSessionId || this.ttsState === 'stopped') return
+      }
+      if (!paragraphs?.length) {
+        this.stopTTS()
+        return
+      }
+
+      this.ttsParagraphs = paragraphs
+      this.ttsParagraphIndex = Math.max(0, Math.min(startIndex, paragraphs.length - 1))
+      if (this.ttsState === 'playing') {
+        this.ttsSessionId++
+        await TextToSpeech.stop().catch(() => {})
+        if (this.ttsState !== 'playing') return
+        this.speakCurrentParagraph()
+      } else {
+        // Paused: resume continues with the chunks of the new paragraph
+        this.ttsChunks = this.splitTextChunks(paragraphs[this.ttsParagraphIndex].text)
+        this.ttsChunkIndex = 0
       }
     },
     async ttsRegisterNativeListeners() {
@@ -170,7 +267,7 @@ export default {
           this.$emit('tts-state', state)
         }),
         await AbsTTSPlayer.addListener('onParagraph', (data) => {
-          if (data) this.ttsNativeFollow?.(data)
+          if (data && !this.ttsSkipInProgress) this.ttsNativeFollow?.(data)
         }),
         await AbsTTSPlayer.addListener('onError', (data) => {
           console.error('[ttsPlayer] Native TTS error', data?.error)
@@ -261,6 +358,7 @@ export default {
         // stops it - never a background session of another book
         if (wasActive) AbsTTSPlayer.stop().catch(() => {})
         this.ttsRemoveNativeListeners()
+        this.ttsNativeBook = null
         if (wasActive) this.$emit('tts-state', 'stopped')
         return
       }
@@ -278,7 +376,7 @@ export default {
         this.ttsAdvance()
         return
       }
-      this.ttsFollowParagraph?.(paragraph)
+      if (!this.ttsSkipInProgress) this.ttsFollowParagraph?.(paragraph)
       this.ttsChunks = this.splitTextChunks(paragraph.text)
       this.ttsChunkIndex = 0
       this.speakNextChunk()

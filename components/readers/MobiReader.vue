@@ -71,6 +71,22 @@ export default {
       const el = this.ttsNativeElements?.[event.paragraphIndex]
       if (el) this.ttsFollowParagraph({ ref: el })
     },
+    /** TTS hook: a "page" is one screen of the scrolled document */
+    ttsEstimatePageChars() {
+      const iframe = document.getElementsByTagName('iframe')[0]
+      const docHeight = iframe?.contentDocument?.body?.scrollHeight || 0
+      const viewHeight = this.$el?.clientHeight || 0
+      if (!docHeight || !viewHeight) return 0
+      const totalChars = this.ttsCollectHtmlParagraphs(iframe?.contentDocument?.body).reduce((sum, p) => sum + p.text.length, 0)
+      return Math.round(totalChars / Math.max(1, docHeight / viewHeight))
+    },
+    /** TTS hook: scroll by screens for the rewind/forward buttons */
+    async ttsTurnPages(delta) {
+      if (!this.$el) return
+      const maxTop = Math.max(0, this.$el.scrollHeight - this.$el.clientHeight)
+      const top = Math.max(0, Math.min(maxTop, this.$el.scrollTop + delta * this.$el.clientHeight))
+      this.$el.scrollTo({ top, behavior: 'auto' })
+    },
     /** TTS hook: scroll the spoken paragraph into view */
     ttsFollowParagraph(paragraph) {
       const rect = paragraph.ref?.getBoundingClientRect?.()
