@@ -462,3 +462,5 @@ class MobiFile {
 }
 
 export default MobiFile;
+
+export { ab2str, uncompression_lz77 };

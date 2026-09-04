@@ -268,11 +268,8 @@ class FolderScanner(private val ctx: Context) {
 
   private fun mimeTypeFor(part: DownloadItemPart): String? {
     return part.audioTrack?.mimeType
-            ?: when (part.ebookFile?.ebookFormat?.lowercase()) {
-              "epub" -> "application/epub+zip"
-              "pdf" -> "application/pdf"
-              else -> "image/jpeg"
-            }
+            ?: part.ebookFile?.let { ebookFormatToMimeType(it.ebookFormat) }
+            ?: "image/jpeg"
   }
 
   fun scanDownloadItem(item: DownloadItem, callback: (DownloadItemScanResult?) -> Unit) {

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.StatFs
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.audiobookshelf.app.data.ebookFormatToMimeType
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.device.FolderScanner
 import com.audiobookshelf.app.models.DownloadItem
@@ -488,11 +489,8 @@ class DownloadItemManager(
 
   private fun mimeTypeFor(part: DownloadItemPart): String =
           part.audioTrack?.mimeType
-                  ?: when (part.ebookFile?.ebookFormat?.lowercase()) {
-                    "epub" -> "application/epub+zip"
-                    "pdf" -> "application/pdf"
-                    else -> "image/jpeg"
-                  }
+                  ?: part.ebookFile?.let { ebookFormatToMimeType(it.ebookFormat) }
+                  ?: "image/jpeg"
 
   private fun serverUrl(item: DownloadItem, part: DownloadItemPart): String {
     val rawCover = if (part.serverPath.endsWith("/cover")) "?raw=1" else ""
