@@ -19,18 +19,8 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPrepare() {
     Log.d(tag, "ON PREPARE MEDIA SESSION COMPAT")
-    playerNotificationService.mediaManager.getFirstItem()?.let { li ->
-      playerNotificationService.mediaManager.play(li, null, playerNotificationService.getPlayItemRequestPayload(false)) {
-        if (it == null) {
-          Log.e(tag, "Failed to play library item")
-        } else {
-          val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
-          Handler(Looper.getMainLooper()).post {
-            playerNotificationService.preparePlayer(it,true, playbackRate)
-          }
-        }
-      }
-    }
+    // Nothing picked - continue the book the user was last on
+    playerNotificationService.playMostRecentItem(true)
   }
 
   // When a read aloud (TTS) session is active the shared media session is taken
@@ -56,6 +46,11 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPlayFromSearch(query: String?, extras: Bundle?) {
     Log.d(tag, "ON PLAY FROM SEARCH $query")
+    // A search without a query ("play my audiobook") means continue, not play anything
+    if (query.isNullOrBlank()) {
+      playerNotificationService.playMostRecentItem(true)
+      return
+    }
     playerNotificationService.mediaManager.getFromSearch(query)?.let { li ->
       playerNotificationService.mediaManager.play(li, null, playerNotificationService.getPlayItemRequestPayload(false)) {
         if (it == null) {
@@ -158,21 +153,23 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       return
     }
 
+    // Nothing picked - continue the book the user was last on
+    if (mediaId.isNullOrEmpty()) {
+      playerNotificationService.playMostRecentItem(true)
+      return
+    }
+
     val libraryItemWrapper: LibraryItemWrapper?
     var podcastEpisode: PodcastEpisode? = null
 
-    if (mediaId.isNullOrEmpty()) {
-      libraryItemWrapper = playerNotificationService.mediaManager.getFirstItem()
+    val libraryItemWithEpisode = playerNotificationService.mediaManager.getPodcastWithEpisodeByEpisodeId(mediaId)
+    if (libraryItemWithEpisode != null) {
+      libraryItemWrapper = libraryItemWithEpisode.libraryItemWrapper
+      podcastEpisode = libraryItemWithEpisode.episode
     } else {
-      val libraryItemWithEpisode = playerNotificationService.mediaManager.getPodcastWithEpisodeByEpisodeId(mediaId)
-      if (libraryItemWithEpisode != null) {
-        libraryItemWrapper = libraryItemWithEpisode.libraryItemWrapper
-        podcastEpisode = libraryItemWithEpisode.episode
-      } else {
-        libraryItemWrapper = playerNotificationService.mediaManager.getById(mediaId)
-        if (libraryItemWrapper == null) {
-          Log.e(tag, "onPlayFromMediaId: Media item not found $mediaId")
-        }
+      libraryItemWrapper = playerNotificationService.mediaManager.getById(mediaId)
+      if (libraryItemWrapper == null) {
+        Log.e(tag, "onPlayFromMediaId: Media item not found $mediaId")
       }
     }
 

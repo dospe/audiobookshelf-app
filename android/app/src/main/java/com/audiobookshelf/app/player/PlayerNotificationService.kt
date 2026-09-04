@@ -268,9 +268,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   fun playTTS(libraryItemId: String?, chapterIndex: Int?, paragraphIndex: Int?) {
     val engine = getTTSEngine()
+
+    // No book given - resume the running session (reader play/pause)
+    if (libraryItemId.isNullOrEmpty()) {
+      startTTSPlayback(chapterIndex, paragraphIndex)
+      return
+    }
+
     // When a different (or no) book is loaded, load it from the cache -
     // this is the path used when a book is picked without the WebView
-    if (!libraryItemId.isNullOrEmpty() && engine.book?.libraryItemId != libraryItemId) {
+    if (engine.book?.libraryItemId != libraryItemId) {
       val cached = ttsBookCache.load(libraryItemId)
       if (cached == null) {
         // Library ebook picked in Android Auto that was never cached - download
@@ -279,14 +286,45 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         return
       }
       engine.prepare(cached)
-      // No explicit position (Android Auto pick) - resume where the reader
-      // or a previous read aloud session left off
-      if (chapterIndex == null) {
-        savedTTSPosition(cached)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
-      }
     }
 
-    startTTSPlayback(chapterIndex, paragraphIndex)
+    // An explicit position comes from the reader, which knows where it is
+    if (chapterIndex != null) {
+      startTTSPlayback(chapterIndex, paragraphIndex)
+      return
+    }
+
+    // Picked in Android Auto: continue where reading last stopped - on this
+    // phone or on any other device. The engine position is not it: preparing a
+    // book resets it to the start, and the book may have been read further in
+    // the reader since this session was left behind
+    val book = engine.book ?: return
+    refreshEbookProgress(book.libraryItemId) {
+      savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
+      startTTSPlayback(null, null)
+    }
+  }
+
+  /**
+   * Pull the current reading position of a server item into the Android Auto
+   * progress cache before resuming it, so read aloud in the car continues where
+   * the phone reader left off instead of at the position cached when the browse
+   * tree was built. Continues with what is cached on any failure - a slightly
+   * old position still beats starting the book over. [cb] runs on the main thread.
+   */
+  private fun refreshEbookProgress(libraryItemId: String, cb: () -> Unit) {
+    if (libraryItemId.startsWith("local") ||
+      DeviceManager.serverAddress.isEmpty() ||
+      !DeviceManager.checkConnectivity(ctx)
+    ) {
+      cb()
+      return
+    }
+
+    apiHandler.getMediaProgress(libraryItemId, null, DeviceManager.serverConnectionConfig) { mediaProgress ->
+      mediaProgress?.let { mediaManager.setServerMediaProgress(it) }
+      Handler(Looper.getMainLooper()).post { cb() }
+    }
   }
 
   private fun startTTSPlayback(chapterIndex: Int?, paragraphIndex: Int?) {
@@ -377,8 +415,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               finishTTSLoading(null)
               val engine = getTTSEngine()
               engine.prepare(book)
-              savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
-              startTTSPlayback(null, null)
+              refreshEbookProgress(book.libraryItemId) {
+                savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
+                startTTSPlayback(null, null)
+              }
             }
           } catch (e: Exception) {
             Log.e(tag, "downloadAndPlayTTS: Failed to extract $libraryItemId", e)
@@ -458,33 +498,106 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
   }
 
+  /** Reading position saved for an ebook, wherever it was last written */
+  private data class SavedEbookProgress(val location: String?, val progress: Double, val lastUpdate: Long)
+
   /**
    * Last saved ebookLocation/ebookProgress for the item - the same progress the
-   * reader and TTSProgressSyncer write. Local items read the local db, streamed
-   * items the server progress loaded for Android Auto. Null when never opened.
+   * reader and TTSProgressSyncer write. Null when the book was never opened.
+   *
+   * A server item can have the position in two places: the server (written by
+   * the reader on any device) and, when the book is downloaded, the local db.
+   * Either can be the newer one - the phone reader may have been offline, or
+   * the server progress cache may date from before the phone session - so the
+   * most recently updated one wins.
    */
-  private fun savedEbookProgress(libraryItemId: String): Pair<String?, Double>? {
+  private fun savedEbookProgress(
+    libraryItemId: String,
+    // The whole local progress table is read from disk - lists pass it in once
+    // instead of paying for it per row
+    localProgressEntries: List<LocalMediaProgress>? = null
+  ): SavedEbookProgress? {
     if (libraryItemId.startsWith("local")) {
       val progress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId) ?: return null
-      return Pair(progress.ebookLocation, progress.ebookProgress ?: 0.0)
+      return SavedEbookProgress(progress.ebookLocation, progress.ebookProgress ?: 0.0, progress.lastUpdate)
     }
-    val progress = mediaManager.serverUserMediaProgress.find { it.libraryItemId == libraryItemId } ?: return null
-    return Pair(progress.ebookLocation, progress.ebookProgress ?: 0.0)
+
+    val serverProgress = mediaManager.serverUserMediaProgress
+      .find { it.libraryItemId == libraryItemId && it.episodeId.isNullOrEmpty() }
+      ?.let { SavedEbookProgress(it.ebookLocation, it.ebookProgress ?: 0.0, it.lastUpdate) }
+    val localProgress = (localProgressEntries ?: DeviceManager.dbManager.getAllLocalMediaProgress())
+      .find { it.libraryItemId == libraryItemId && it.episodeId.isNullOrEmpty() }
+      ?.let { SavedEbookProgress(it.ebookLocation, it.ebookProgress ?: 0.0, it.lastUpdate) }
+
+    // Entries without any ebook position are audio-only progress for the same
+    // item - keeping them would hide a reading position saved earlier
+    return listOfNotNull(serverProgress, localProgress)
+      .filter { it.progress > 0.0 || !it.location.isNullOrEmpty() }
+      .maxByOrNull { it.lastUpdate }
   }
 
   /** Start position for a book resumed from the saved progress, null to start from the beginning */
   private fun savedTTSPosition(book: TTSBook): Pair<Int, Int>? {
-    val (location, ebookProgress) = savedEbookProgress(book.libraryItemId) ?: return null
-    if (ebookProgress >= 1.0) return null // finished - start over
-    return book.positionForLocation(location)
-      ?: if (ebookProgress > 0.0) book.positionForProgress(ebookProgress) else null
+    val saved = savedEbookProgress(book.libraryItemId) ?: return null
+    if (saved.progress >= 1.0) return null // finished - start over
+    return book.positionForLocation(saved.location)
+      ?: if (saved.progress > 0.0) book.positionForProgress(saved.progress) else null
   }
 
   /** True when the TTS cache holds a partially read book - shows the Continue category */
   fun hasInProgressCachedEbooks(): Boolean {
-    return ttsBookCache.list().any { summary ->
-      val ebookProgress = savedEbookProgress(summary.libraryItemId)?.second ?: 0.0
-      ebookProgress > 0.0 && ebookProgress < 1.0
+    return mostRecentInProgressEbook() != null
+  }
+
+  /**
+   * Partially read cached ebook with the most recent position, and when it was
+   * saved - the read aloud counterpart of the most recent item in progress
+   */
+  private fun mostRecentInProgressEbook(): Pair<String, Long>? {
+    val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
+    return ttsBookCache.list()
+      .mapNotNull { summary ->
+        val saved = savedEbookProgress(summary.libraryItemId, localProgressEntries) ?: return@mapNotNull null
+        if (saved.progress <= 0.0 || saved.progress >= 1.0) return@mapNotNull null
+        Pair(summary.libraryItemId, saved.lastUpdate)
+      }
+      .maxByOrNull { it.second }
+  }
+
+  /**
+   * Play whatever the user was last on, for a car asking to play without
+   * picking anything (the steering wheel play button, "resume my audiobook").
+   *
+   * The most recently played audiobook or podcast episode, or the most recently
+   * read ebook when that is newer - both across devices, since the positions
+   * come from the server. Falls back to any library item, as before, when
+   * nothing is in progress.
+   */
+  fun playMostRecentItem(playWhenReady: Boolean) {
+    val mostRecentItem = mediaManager.getMostRecentInProgressItem()
+    val mostRecentEbook = mostRecentInProgressEbook()
+
+    if (mostRecentEbook != null &&
+      (mostRecentItem == null || mostRecentEbook.second > mostRecentItem.progressLastUpdate)
+    ) {
+      Log.d(tag, "playMostRecentItem: Reading aloud ${mostRecentEbook.first}")
+      playTTS(mostRecentEbook.first, null, null)
+      return
+    }
+
+    val libraryItemWrapper = mostRecentItem?.libraryItemWrapper ?: mediaManager.getFirstItem()
+    if (libraryItemWrapper == null) {
+      Log.e(tag, "playMostRecentItem: Nothing to play")
+      return
+    }
+
+    mediaManager.play(libraryItemWrapper, mostRecentItem?.episode, getPlayItemRequestPayload(false)) { playbackSession ->
+      if (playbackSession == null) {
+        Log.e(tag, "playMostRecentItem: Failed to play library item")
+      } else {
+        val playbackRate = mediaManager.getSavedPlaybackRate()
+        Handler(Looper.getMainLooper()).post { preparePlayer(playbackSession, playWhenReady, playbackRate) }
+      }
     }
   }
 
@@ -509,10 +622,12 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     title: String,
     author: String?,
     coverUri: Uri?,
-    groupTitle: String? = null
+    groupTitle: String? = null,
+    localProgressEntries: List<LocalMediaProgress>? = null
   ): MediaBrowserCompat.MediaItem {
     val extras = Bundle()
-    savedEbookProgress(libraryItemId)?.let { (_, ebookProgress) ->
+    savedEbookProgress(libraryItemId, localProgressEntries)?.let { saved ->
+      val ebookProgress = saved.progress
       if (ebookProgress >= 1.0) {
         extras.putInt(
           MediaConstants.DESCRIPTION_EXTRAS_KEY_COMPLETION_STATUS,
@@ -1688,6 +1803,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       if (mediaManager.checkResetServerItems()) {
         AbsLogger.info(tag, "onGetRoot: Reset Android Auto server items cache (${DeviceManager.serverConnectionConfigString})")
         forceReloadingAndroidAuto = true
+      } else if (firstLoadDone) {
+        // Server data is kept for the life of the service, so connecting to the
+        // car reuses whatever was loaded the last time it was browsed. Listening
+        // and reading done on the phone in between happens on the server, so it
+        // has to be pulled in again - otherwise the car continues from a
+        // position the user has long moved past.
+        refreshAndroidAutoProgress()
       }
 
       isAndroidAuto = true
@@ -1707,6 +1829,23 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
   }
 
+  /**
+   * Re-read progress from the server and tell the car to reload the browse
+   * lists built from it when anything moved. Throttled in [MediaManager], so
+   * the reload it triggers does not start another round.
+   */
+  private fun refreshAndroidAutoProgress() {
+    mediaManager.refreshServerProgress { changed ->
+      if (!changed) return@refreshServerProgress
+      AbsLogger.info(tag, "refreshAndroidAutoProgress: Progress changed, reloading Android Auto browse lists")
+      Handler(Looper.getMainLooper()).post {
+        notifyChildrenChanged(AUTO_MEDIA_ROOT)
+        notifyChildrenChanged(CONTINUE_ROOT)
+        notifyChildrenChanged(EBOOKS_ROOT)
+      }
+    }
+  }
+
   override fun onLoadChildren(
           parentMediaId: String,
           result: Result<MutableList<MediaBrowserCompat.MediaItem>>
@@ -1723,8 +1862,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     if (parentMediaId == EBOOKS_ROOT) { // Ebooks cached for the read aloud (TTS) player
+      val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
       val ebookBrowseItems = ttsBookCache.list().map { summary ->
-        buildEbookBrowseItem(summary.libraryItemId, summary.title, summary.author, serverCoverUri(summary.libraryItemId))
+        buildEbookBrowseItem(
+          summary.libraryItemId,
+          summary.title,
+          summary.author,
+          serverCoverUri(summary.libraryItemId),
+          null,
+          localProgressEntries
+        )
       }
       result.sendResult(ebookBrowseItems.toMutableList())
     } else if (parentMediaId == DOWNLOADS_ROOT) { // Load downloads
@@ -1756,6 +1903,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       result.sendResult(localBrowseItems)
     } else if (parentMediaId == CONTINUE_ROOT) {
+      // Served from the cached progress so the list appears at once; a refresh
+      // that finds newer positions reloads it (throttled, so this cannot loop)
+      refreshAndroidAutoProgress()
+
       val localBrowseItems: MutableList<MediaBrowserCompat.MediaItem> = mutableListOf()
       mediaManager.serverItemsInProgress.forEach { itemInProgress ->
         val progress: MediaProgressWrapper?
@@ -1822,8 +1973,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       // Partially read ebooks from the TTS cache - continue reading aloud in
       // the car; grouped under an Ebooks header after the audio items
+      val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
       ttsBookCache.list().forEach { summary ->
-        val ebookProgress = savedEbookProgress(summary.libraryItemId)?.second ?: 0.0
+        val ebookProgress = savedEbookProgress(summary.libraryItemId, localProgressEntries)?.progress ?: 0.0
         if (ebookProgress <= 0.0 || ebookProgress >= 1.0) return@forEach
         localBrowseItems +=
                 buildEbookBrowseItem(
@@ -1831,7 +1983,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                         summary.title,
                         summary.author,
                         serverCoverUri(summary.libraryItemId),
-                        "Ebooks"
+                        "Ebooks",
+                        localProgressEntries
                 )
       }
 
@@ -2101,6 +2254,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             result.sendResult(mutableListOf())
           } else {
             if (shelf.type == "book") {
+              val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
               val children =
                       (shelf as LibraryShelfBookEntity).entities?.mapNotNull { libraryItem ->
                         if (!libraryItem.checkHasTracks()) {
@@ -2113,7 +2267,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                                   libraryItem.id,
                                   libraryItem.title,
                                   libraryItem.authorName,
-                                  libraryItem.getCoverUri()
+                                  libraryItem.getCoverUri(),
+                                  null,
+                                  localProgressEntries
                           )
                         }
                         val progress =
@@ -2230,13 +2386,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       if (mediaIdParts[3] == "EBOOKS") {
         // Epub ebooks in the library, spoken by the read aloud (TTS) player
         mediaManager.loadLibraryEbooks(mediaIdParts[2]) { libraryItems ->
+          val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
           val children =
                   libraryItems.map { libraryItem ->
                     buildEbookBrowseItem(
                             libraryItem.id,
                             libraryItem.title,
                             libraryItem.authorName,
-                            libraryItem.getCoverUri()
+                            libraryItem.getCoverUri(),
+                            null,
+                            localProgressEntries
                     )
                   }
           result.sendResult(children.toMutableList())

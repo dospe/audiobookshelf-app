@@ -29,18 +29,8 @@ class MediaSessionPlaybackPreparer(var playerNotificationService:PlayerNotificat
 
   override fun onPrepare(playWhenReady: Boolean) {
     Log.d(tag, "ON PREPARE $playWhenReady")
-    playerNotificationService.mediaManager.getFirstItem()?.let { li ->
-      playerNotificationService.mediaManager.play(li, null, playerNotificationService.getPlayItemRequestPayload(false)) {
-        if (it == null) {
-          Log.e(tag, "Failed to play library item")
-        } else {
-          val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
-          Handler(Looper.getMainLooper()).post {
-            playerNotificationService.preparePlayer(it, playWhenReady, playbackRate)
-          }
-        }
-      }
-    }
+    // Nothing picked - continue the book the user was last on
+    playerNotificationService.playMostRecentItem(playWhenReady)
   }
 
   override fun onPrepareFromMediaId(mediaId: String, playWhenReady: Boolean, extras: Bundle?) {
@@ -73,6 +63,11 @@ class MediaSessionPlaybackPreparer(var playerNotificationService:PlayerNotificat
 
   override fun onPrepareFromSearch(query: String, playWhenReady: Boolean, extras: Bundle?) {
     Log.d(tag, "ON PREPARE FROM SEARCH $query")
+    // A search without a query ("play my audiobook") means continue, not play anything
+    if (query.isBlank()) {
+      playerNotificationService.playMostRecentItem(playWhenReady)
+      return
+    }
     playerNotificationService.mediaManager.getFromSearch(query)?.let { li ->
       playerNotificationService.mediaManager.play(li, null, playerNotificationService.getPlayItemRequestPayload(false)) {
         if (it == null) {
