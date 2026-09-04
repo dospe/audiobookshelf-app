@@ -1,5 +1,11 @@
 name: Publish Test App
 
+# Builds the debug APK of master and attaches it to the pre-release tagged
+# "latest", recreating the release every time so it always carries exactly
+# one APK built from the current master. Releases (unlike workflow
+# artifacts) are shown in the GitHub mobile app and the APK downloads
+# directly from there.
+
 on:
   workflow_dispatch:
   push:
@@ -8,6 +14,13 @@ on:
     paths-ignore:
       - 'ios/**'
       - 'readme.md'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-test-app
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -46,38 +59,22 @@ jobs:
           name="audiobookshelf-${build}.apk"
           mv -v app-debug.apk "${name}"
 
-      - name: prepare test page ressources
+      - name: publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir ghpages
-          cp android/app/build/outputs/apk/debug/*apk ghpages/
-          cp static/Logo.png ghpages/logo.png
-          cp .github/testing-page-template.html ghpages/index.html
+          apk="$(ls android/app/build/outputs/apk/debug/*.apk)"
+          short_sha="$(git rev-parse --short HEAD)"
+          built_at="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          notes="Debug build of \`master\` at ${short_sha}, built ${built_at}.
 
-      - name: build test page
-        working-directory: ghpages
-        run: |
-          sed -i "s/__DATE__/$(date)/g" index.html
-          sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
-          sed -i "s/__APK__/$(ls *apk)/g" index.html
+          Download the APK below and install it on the phone (allow installs from unknown sources when asked). Android only."
 
-      - name: upload test page artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./ghpages
-
-  deploy:
-    needs: build
-
-    permissions:
-      pages: write
-      id-token: write
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    runs-on: ubuntu-latest
-    steps:
-      - name: deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          # Recreate the release so the "latest" tag moves to this commit and
+          # only the current APK stays attached
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest "${apk}" \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Latest test build (${short_sha})" \
+            --notes "${notes}"
