@@ -488,11 +488,8 @@ class DownloadItemManager(
 
   private fun mimeTypeFor(part: DownloadItemPart): String =
           part.audioTrack?.mimeType
-                  ?: when (part.ebookFile?.ebookFormat?.lowercase()) {
-                    "epub" -> "application/epub+zip"
-                    "pdf" -> "application/pdf"
-                    else -> "image/jpeg"
-                  }
+                  ?: part.ebookFile?.let { ebookFormatToMimeType(it.ebookFormat) }
+                  ?: "image/jpeg"
 
   private fun serverUrl(item: DownloadItem, part: DownloadItemPart): String {
     val rawCover = if (part.serverPath.endsWith("/cover")) "?raw=1" else ""

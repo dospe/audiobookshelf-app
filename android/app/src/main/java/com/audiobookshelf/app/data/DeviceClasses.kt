@@ -97,13 +97,45 @@ data class LocalFile(
   }
   @JsonIgnore
   fun getEBookFormat(): String? {
-    if (mimeType == "application/epub+zip") return "epub"
-    if (mimeType == "application/pdf") return "pdf"
-    if (mimeType == "application/x-mobipocket-ebook") return "mobi"
-    if (mimeType == "application/vnd.comicbook+zip") return "cbz"
-    if (mimeType == "application/vnd.comicbook-rar") return "cbr"
-    if (mimeType == "application/vnd.amazon.mobi8-ebook") return "azw3"
-    return null
+    ebookFormatForMimeType(mimeType)?.let { return it }
+    // Mime types of document files are ambiguous (e.g. .pdb, application/octet-stream)
+    // so fall back to the file extension
+    val extension = filename?.substringAfterLast('.', "")?.lowercase() ?: return null
+    return if (extension in SUPPORTED_EBOOK_FORMATS) extension else null
+  }
+}
+
+val SUPPORTED_EBOOK_FORMATS = listOf("epub", "pdf", "mobi", "azw3", "cbz", "cbr", "doc", "docx", "rtf", "pdb")
+
+fun ebookFormatForMimeType(mimeType: String?): String? {
+  return when (mimeType) {
+    "application/epub+zip" -> "epub"
+    "application/pdf" -> "pdf"
+    "application/x-mobipocket-ebook" -> "mobi"
+    "application/vnd.comicbook+zip" -> "cbz"
+    "application/vnd.comicbook-rar" -> "cbr"
+    "application/vnd.amazon.mobi8-ebook" -> "azw3"
+    "application/msword" -> "doc"
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+    "application/rtf", "text/rtf" -> "rtf"
+    "application/vnd.palm", "application/x-pilot", "application/x-pilot-prc" -> "pdb"
+    else -> null
+  }
+}
+
+fun ebookFormatToMimeType(ebookFormat: String?): String {
+  return when (ebookFormat?.lowercase()) {
+    "epub" -> "application/epub+zip"
+    "pdf" -> "application/pdf"
+    "mobi" -> "application/x-mobipocket-ebook"
+    "azw3" -> "application/vnd.amazon.mobi8-ebook"
+    "cbz" -> "application/vnd.comicbook+zip"
+    "cbr" -> "application/vnd.comicbook-rar"
+    "doc" -> "application/msword"
+    "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "rtf" -> "application/rtf"
+    "pdb" -> "application/vnd.palm"
+    else -> "application/octet-stream"
   }
 }
 

@@ -77,8 +77,16 @@ extension EBookFile {
             mimeType = "application/vnd.comicbook-rar"
         case "cbz":
             mimeType = "application/vnd.comicbook+zip"
+        case "doc":
+            mimeType = "application/msword"
+        case "docx":
+            mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "rtf":
+            mimeType = "application/rtf"
+        case "pdb":
+            mimeType = "application/vnd.palm"
         default:
-            mimeType = "application/epub+zip"
+            mimeType = "application/octet-stream"
         }
         return mimeType
     }

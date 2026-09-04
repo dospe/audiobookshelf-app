@@ -7,13 +7,13 @@
           <span class="material-symbols text-3xl text-fg">chevron_left</span>
         </button>
         <div class="flex-grow" />
-        <button v-if="isComic || isEpub" type="button" class="inline-flex mx-2" @click.stop="clickTOCBtn">
+        <button v-if="isComic || isEpub || isDocument" type="button" class="inline-flex mx-2" @click.stop="clickTOCBtn">
           <span class="material-symbols text-2xl text-fg">format_list_bulleted</span>
         </button>
         <button v-if="ttsAvailable" type="button" class="inline-flex mx-2" @click.stop="clickTTSBtn">
           <span class="material-symbols text-2xl" :class="showTTSBar ? 'text-warning' : 'text-fg'">record_voice_over</span>
         </button>
-        <button v-if="isEpub" type="button" class="inline-flex mx-2" @click.stop="clickSettingsBtn">
+        <button v-if="isEpub || isDocument" type="button" class="inline-flex mx-2" @click.stop="clickSettingsBtn">
           <span class="material-symbols text-2xl text-fg">settings</span>
         </button>
         <button v-if="comicHasMetadata" type="button" class="inline-flex mx-2" @click.stop="clickMetadataBtn">
@@ -25,7 +25,10 @@
     </div>
 
     <!-- ereader -->
-    <component v-if="readerComponentName" ref="readerComponent" :is="readerComponentName" :url="ebookUrl" :library-item="selectedLibraryItem" :is-local="isLocal" :keep-progress="keepProgress" :showing-toolbar="showingToolbar" @touchstart="touchstart" @touchend="touchend" @loaded="readerLoaded" @hook:mounted="readerMounted" @tts-state="ttsStateChanged" />
+    <component v-if="readerComponentName" ref="readerComponent" :is="readerComponentName" :url="ebookUrl" :library-item="selectedLibraryItem" :is-local="isLocal" :keep-progress="keepProgress" :showing-toolbar="showingToolbar" :ebook-format="ebookFormat" @touchstart="touchstart" @touchend="touchend" @loaded="readerLoaded" @hook:mounted="readerMounted" @tts-state="ttsStateChanged" />
+    <div v-else class="w-full h-full flex items-center justify-center px-8">
+      <p class="text-center text-fg-muted">{{ $getString('MessageUnsupportedEbookFormat', [ebookFormat || '']) }}</p>
+    </div>
 
     <!-- read aloud (TTS) bar -->
     <div v-if="showTTSBar && ttsAvailable" class="fixed left-0 w-full z-30 px-4 py-2 flex items-center bg-bg text-fg" :style="{ bottom: ttsBarBottom, boxShadow: '0px -8px 8px #11111155' }" @touchstart.stop @mousedown.stop @touchend.stop @mouseup.stop>
@@ -121,11 +124,17 @@
               </div>
               <ui-range-input v-model="ereaderSettings.textStroke" :min="0" :max="300" :step="5" input-width="180px" @input="settingsUpdated" />
             </div>
-            <div class="flex items-center mb-6">
+            <div v-if="isEpub" class="flex items-center mb-6">
               <div class="w-32">
                 <p class="text-sm">{{ $strings.LabelLayout }}</p>
               </div>
               <ui-toggle-btns v-model="ereaderSettings.spread" name="spread" :items="spreadItems" @input="settingsUpdated" />
+            </div>
+            <div v-if="isDocument" class="flex items-center mb-6">
+              <div class="w-32">
+                <p class="text-sm">{{ $strings.LabelTextEncoding }}</p>
+              </div>
+              <ui-dropdown v-model="ereaderSettings.legacyEncoding" :items="legacyEncodingItems" small class="flex-grow max-w-[200px]" @input="settingsUpdated" />
             </div>
             <div class="flex items-center mb-6">
               <div class="w-32">
@@ -192,6 +201,7 @@ export default {
         lineSpacing: 115,
         spread: 'auto',
         textStroke: 0,
+        legacyEncoding: '',
         navigateWithVolume: 'enabled',
         navigateWithVolumeWhilePlaying: false,
         keepScreenAwake: false,
@@ -249,7 +259,7 @@ export default {
       return this.media?.metadata || {}
     },
     ereaderTheme() {
-      if (this.isEpub) return this.ereaderSettings.theme
+      if (this.isEpub || this.isDocument) return this.ereaderSettings.theme
       return document.documentElement.dataset.theme || 'dark'
     },
     spreadItems() {
@@ -295,7 +305,7 @@ export default {
     ttsBarBottom() {
       const playerOffset = this.isPlayerOpen ? 120 : 0
       // Epub and pdf readers show a bottom progress strip the bar sits above
-      const progressStripOffset = this.isEpub || this.isPdf ? 32 : 0
+      const progressStripOffset = this.isEpub || this.isPdf || this.isDocument ? 32 : 0
       return `${playerOffset + progressStripOffset}px`
     },
     onOffToggleButtonItems() {
@@ -338,11 +348,22 @@ export default {
         }
       ]
     },
+    legacyEncodingItems() {
+      return [
+        { text: this.$strings.LabelTextEncodingAuto, value: '' },
+        { text: 'Windows-1250 (CE)', value: 'windows-1250' },
+        { text: 'Windows-1252 (West)', value: 'windows-1252' },
+        { text: 'Windows-1251 (Cyrillic)', value: 'windows-1251' },
+        { text: 'ISO-8859-2', value: 'iso-8859-2' },
+        { text: 'UTF-8', value: 'utf-8' }
+      ]
+    },
     readerComponentName() {
       if (this.ebookType === 'epub') return 'readers-epub-reader'
       else if (this.ebookType === 'mobi') return 'readers-mobi-reader'
       else if (this.ebookType === 'comic') return 'readers-comic-reader'
       else if (this.ebookType === 'pdf') return 'readers-pdf-reader'
+      else if (this.ebookType === 'document') return 'readers-document-reader'
       return null
     },
     ebookFile() {
@@ -366,6 +387,7 @@ export default {
       else if (this.isEpub) return 'epub'
       else if (this.isPdf) return 'pdf'
       else if (this.isComic) return 'comic'
+      else if (this.isDocument) return 'document'
       return null
     },
     isEpub() {
@@ -380,8 +402,11 @@ export default {
     isComic() {
       return this.ebookFormat == 'cbz' || this.ebookFormat == 'cbr'
     },
+    isDocument() {
+      return ['doc', 'docx', 'rtf', 'pdb'].includes(this.ebookFormat)
+    },
     ttsAvailable() {
-      return this.isEpub || this.isMobi || this.isPdf
+      return this.isEpub || this.isMobi || this.isPdf || this.isDocument
     },
     isNativeTTS() {
       return isNativeTTSPlayerAvailable()
@@ -586,7 +611,7 @@ export default {
       }
     },
     async initWatchVolume() {
-      if (this.isInittingWatchVolume || !this.isEpub) return
+      if (this.isInittingWatchVolume || !(this.isEpub || this.isDocument)) return
       this.isInittingWatchVolume = true
       const isWatching = await VolumeButtons.isWatching()
 
