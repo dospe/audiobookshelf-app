@@ -160,6 +160,15 @@
               </div>
               <ui-btn small @click="showTTSSettingsDialog = true">{{ $strings.LabelReadAloudVoice }}</ui-btn>
             </div>
+            <div class="flex items-center mb-6">
+              <div class="w-32">
+                <p class="text-sm">{{ $strings.LabelBookSettings }}</p>
+              </div>
+              <div>
+                <p class="text-xs text-fg-muted mb-2">{{ hasBookSettingsOverride ? $strings.MessageBookSettingsSaved : $strings.MessageBookSettingsDefault }}</p>
+                <ui-btn small :disabled="!hasBookSettingsOverride" @click="setBookSettingsAsDefault">{{ $strings.ButtonUseForAllBooks }}</ui-btn>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -175,6 +184,10 @@ import { Capacitor } from '@capacitor/core'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
+
+// Settings that are remembered per book (on the server) when they differ from
+// the global defaults. The rest (TTS voice, volume buttons, ...) is global only.
+const BOOK_SETTING_KEYS = ['theme', 'font', 'fontScale', 'lineSpacing', 'textStroke', 'spread', 'legacyEncoding']
 
 export default {
   data() {
@@ -194,6 +207,9 @@ export default {
       comicHasMetadata: false,
       chapters: [],
       isInittingWatchVolume: false,
+      globalEreaderSettings: null,
+      bookSettingsOverride: null,
+      bookSettingsSaveTimeout: null,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -434,18 +450,116 @@ export default {
     keepProgress() {
       return this.$store.state.ereaderKeepProgress
     },
+    /** Server library item id used to store per-book reader settings, null for local-only items */
+    bookSettingsServerId() {
+      if (!this.selectedLibraryItem) return null
+      if (!this.isLocal) return this.selectedLibraryItem.id
+      if (!this.selectedLibraryItem.serverAddress || !this.selectedLibraryItem.libraryItemId) return null
+      if (this.$store.getters['user/getServerAddress'] === this.selectedLibraryItem.serverAddress) {
+        return this.selectedLibraryItem.libraryItemId
+      }
+      return null
+    },
+    bookSettingsCacheKey() {
+      const id = this.bookSettingsServerId || this.selectedLibraryItem?.id
+      return id ? `ereaderBookSettings:${id}` : null
+    },
+    hasBookSettingsOverride() {
+      return !!this.bookSettingsOverride && Object.keys(this.bookSettingsOverride).length > 0
+    },
     ebookFileId() {
       return this.$store.state.ereaderFileId
     }
   },
   methods: {
     settingsUpdated() {
+      this.applyEreaderSettings()
+      this.saveGlobalEreaderSettings()
+      this.saveBookSettings()
+    },
+    applyEreaderSettings() {
       // Pass a copy so the reader component can detect which settings changed
       this.$refs.readerComponent?.updateSettings?.({ ...this.ereaderSettings })
-      localStorage.setItem('ereaderSettings', JSON.stringify(this.ereaderSettings))
 
       this.initWatchVolume()
       this.initKeepScreenAwake()
+    },
+    /**
+     * Global settings are the defaults for every book. Per-book keys keep the
+     * value they had when the book was opened, everything else is stored as is.
+     */
+    saveGlobalEreaderSettings() {
+      const global = { ...this.ereaderSettings }
+      if (this.globalEreaderSettings) {
+        for (const key of BOOK_SETTING_KEYS) {
+          if (this.globalEreaderSettings[key] !== undefined) global[key] = this.globalEreaderSettings[key]
+        }
+      }
+      this.globalEreaderSettings = global
+      localStorage.setItem('ereaderSettings', JSON.stringify(global))
+    },
+    /** Per-book settings that differ from the global defaults, or null */
+    getBookSettingsDiff() {
+      if (!this.globalEreaderSettings) return null
+      const diff = {}
+      for (const key of BOOK_SETTING_KEYS) {
+        const value = this.ereaderSettings[key]
+        if (value === undefined || value === null) continue
+        if (value !== this.globalEreaderSettings[key]) diff[key] = value
+      }
+      return Object.keys(diff).length ? diff : null
+    },
+    saveBookSettings() {
+      const diff = this.getBookSettingsDiff()
+      const changed = JSON.stringify(diff) !== JSON.stringify(this.bookSettingsOverride)
+      this.bookSettingsOverride = diff
+      if (!changed) return
+      this.cacheBookSettings(diff)
+
+      clearTimeout(this.bookSettingsSaveTimeout)
+      this.bookSettingsSaveTimeout = setTimeout(() => this.sendBookSettings(diff), 1000)
+    },
+    cacheBookSettings(diff) {
+      if (!this.bookSettingsCacheKey) return
+      try {
+        if (diff) localStorage.setItem(this.bookSettingsCacheKey, JSON.stringify(diff))
+        else localStorage.removeItem(this.bookSettingsCacheKey)
+      } catch (error) {
+        console.error('Failed to cache book settings', error)
+      }
+    },
+    sendBookSettings(diff) {
+      if (!this.bookSettingsServerId) return
+      this.$nativeHttp.patch(`/api/me/progress/${this.bookSettingsServerId}`, { ebookSettings: diff }).catch((error) => {
+        console.error('Failed to save book settings', error)
+      })
+    },
+    /**
+     * Per-book settings saved for the current book: from the server progress
+     * when available, otherwise from the local cache (offline / local items).
+     */
+    loadBookSettingsOverride() {
+      const serverProgress = this.bookSettingsServerId ? this.$store.getters['user/getUserMediaProgress'](this.bookSettingsServerId) : null
+      if (serverProgress && serverProgress.ebookSettings !== undefined) {
+        const override = serverProgress.ebookSettings && typeof serverProgress.ebookSettings === 'object' ? serverProgress.ebookSettings : null
+        this.cacheBookSettings(override)
+        return override
+      }
+      if (!this.bookSettingsCacheKey) return null
+      try {
+        const cached = localStorage.getItem(this.bookSettingsCacheKey)
+        return cached ? JSON.parse(cached) : null
+      } catch (error) {
+        return null
+      }
+    },
+    /** Make the current appearance settings the default for all books */
+    setBookSettingsAsDefault() {
+      const global = { ...(this.globalEreaderSettings || this.ereaderSettings) }
+      for (const key of BOOK_SETTING_KEYS) global[key] = this.ereaderSettings[key]
+      this.globalEreaderSettings = global
+      localStorage.setItem('ereaderSettings', JSON.stringify(global))
+      this.saveBookSettings()
     },
     goToChapter(href) {
       this.showTOCModal = false
@@ -604,11 +718,23 @@ export default {
               this.ereaderSettings[key] = _ereaderSettings[key]
             }
           }
-          this.settingsUpdated()
         }
       } catch (error) {
         console.error('Failed to load ereader settings', error)
       }
+      this.globalEreaderSettings = { ...this.ereaderSettings }
+
+      // Apply the settings remembered for this book on top of the defaults
+      clearTimeout(this.bookSettingsSaveTimeout)
+      const override = this.loadBookSettingsOverride()
+      this.bookSettingsOverride = null
+      if (override) {
+        for (const key of BOOK_SETTING_KEYS) {
+          if (override[key] !== undefined && override[key] !== null) this.ereaderSettings[key] = override[key]
+        }
+        this.bookSettingsOverride = this.getBookSettingsDiff()
+      }
+      this.applyEreaderSettings()
     },
     async initWatchVolume() {
       if (this.isInittingWatchVolume || !(this.isEpub || this.isDocument)) return
