@@ -256,6 +256,33 @@ export default {
         this.$store.commit('user/setUser', user)
       }
     },
+    /**
+     * Server finished scanning a library. Show the outcome and let the
+     * bookshelf pages reload so newly added items appear right away.
+     * @param {{ id: string, name: string, error: string|null, results: { added: number, updated: number, missing: number }|null }} data
+     */
+    libraryScanComplete(data) {
+      if (!data?.id) return
+
+      const libraryName = data.name || this.$store.getters['libraries/getCurrentLibraryName'] || ''
+      if (data.error) {
+        this.$toast.error(this.$getString('ToastLibraryScanError', [libraryName, data.error]))
+      } else if (!data.results) {
+        // Scan was cancelled or nothing was found
+        this.$toast.info(this.$getString('ToastLibraryScanNoResults', [libraryName]))
+      } else {
+        const added = data.results.added || 0
+        const updated = data.results.updated || 0
+        const missing = data.results.missing || 0
+        if (!added && !updated && !missing) {
+          this.$toast.info(this.$getString('ToastLibraryScanNoChanges', [libraryName]))
+        } else {
+          this.$toast.success(this.$getString('ToastLibraryScanComplete', [libraryName, added, updated, missing]))
+        }
+      }
+
+      this.$eventBus.$emit('library-scan-complete', data)
+    },
     async userMediaProgressUpdated(payload) {
       const prog = payload.data // MediaProgress
       await AbsLogger.info({ tag: 'default', message: `userMediaProgressUpdate: Received updated media progress for current user from socket event. Media item id ${payload.id}` })
@@ -352,6 +379,7 @@ export default {
 
     this.$socket.on('user_updated', this.userUpdated)
     this.$socket.on('user_media_progress_updated', this.userMediaProgressUpdated)
+    this.$socket.on('scan_complete', this.libraryScanComplete)
 
     if (this.$store.state.isFirstLoad) {
       AbsLogger.info({ tag: 'default', message: `mounted: initializing first load (${this.$platform} v${this.$config.version})` })
@@ -387,6 +415,7 @@ export default {
     document.removeEventListener('visibilitychange', this.visibilityChanged)
     this.$socket.off('user_updated', this.userUpdated)
     this.$socket.off('user_media_progress_updated', this.userMediaProgressUpdated)
+    this.$socket.off('scan_complete', this.libraryScanComplete)
   }
 }
 </script>

@@ -63,6 +63,11 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
     private set
   var voiceName: String = "" // "" = engine default voice for the language
     private set
+  // Page skips (media session next/previous): pages per skip and characters per displayed page
+  var pageStep: Int = TTSBook.DEFAULT_PAGE_STEP
+    private set
+  var pageChars: Int = TTSBook.DEFAULT_PAGE_CHARS
+    private set
 
   private var chunks: List<String> = emptyList()
   private var chunkIndex = 0
@@ -198,6 +203,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
       }
     }
     newBook.voice?.let { voiceName = it }
+    setPageStep(newBook.pageStep, newBook.pageChars)
     chapterIndex = 0
     paragraphIndex = 0
     chunks = emptyList()
@@ -292,6 +298,53 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
 
   fun seekChapter(delta: Int) {
     seekTo(chapterIndex + delta, 0)
+  }
+
+  /**
+   * Pages per media session skip and the reader's characters-per-page
+   * estimate; values <= 0 keep the defaults
+   */
+  fun setPageStep(newPageStep: Int, newPageChars: Int) {
+    pageStep = if (newPageStep > 0) newPageStep else TTSBook.DEFAULT_PAGE_STEP
+    pageChars = if (newPageChars > 0) newPageChars else TTSBook.DEFAULT_PAGE_CHARS
+  }
+
+  /**
+   * Skip `delta` steps of [pageStep] pages (media session next/previous).
+   * A pdf chapter is one page, so pdfs skip by chapters; other formats move
+   * by [pageChars] characters per page to the paragraph at the target,
+   * always at least one paragraph in the requested direction. The reader,
+   * when open, follows through the paragraph event.
+   */
+  fun seekPages(delta: Int) {
+    val currentBook = book ?: return
+    if (delta == 0) return
+    val steps = delta * pageStep
+
+    if (currentBook.ebookFormat == "pdf") {
+      val target = (chapterIndex + steps).coerceIn(0, currentBook.chapters.size - 1)
+      if (target == chapterIndex && delta > 0) return // already on the last page
+      seekTo(target, 0)
+      return
+    }
+
+    val currentChars = currentBook.charsBefore(chapterIndex, paragraphIndex)
+    val targetChars = currentChars + steps * pageChars
+    if (targetChars <= 0) {
+      seekTo(0, 0)
+      return
+    }
+    if (targetChars >= currentBook.totalChars) {
+      if (delta > 0) seekParagraph(1) // near the end: just move on, past the end is ignored
+      return
+    }
+    val (ci, pi) = currentBook.positionForProgress(targetChars.toDouble() / currentBook.totalChars)
+    if (ci == chapterIndex && pi == paragraphIndex) {
+      // Target landed in the current (long) paragraph - still move one paragraph
+      seekParagraph(if (delta > 0) 1 else -1)
+      return
+    }
+    seekTo(ci, pi)
   }
 
   fun setPlaybackRate(newRate: Float) {

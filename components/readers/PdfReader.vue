@@ -168,6 +168,14 @@ export default {
       const chapterIndex = book.chapters.findIndex((c) => Number(c.startLocation) >= this.page)
       return { chapterIndex: Math.max(0, chapterIndex), paragraphIndex: 0 }
     },
+    /** TTS hook: turn pdf pages for the rewind/forward buttons */
+    async ttsTurnPages(delta) {
+      if (!this.numPages) return
+      const newPage = Math.max(1, Math.min(this.numPages, this.page + delta))
+      if (newPage === this.page) return
+      this.page = newPage
+      this.updateProgress()
+    },
     /** Native TTS hook: turn to the spoken page */
     ttsNativeFollow(event) {
       const pageNum = Number(event.location)

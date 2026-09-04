@@ -147,6 +147,29 @@ class AbsTTSPlayer : Plugin() {
     }
   }
 
+  /** Skip by the configured number of pages: delta -1 = back, 1 = forward */
+  @PluginMethod
+  fun seekPages(call: PluginCall) {
+    if (!isServiceReady()) return call.reject("Player service not ready")
+    val delta = call.getInt("delta") ?: 1
+    mainHandler.post {
+      playerNotificationService.ttsEngine?.seekPages(delta)
+      call.resolve()
+    }
+  }
+
+  /** Pages per skip and the reader's characters-per-page estimate (0 = keep default) */
+  @PluginMethod
+  fun setPageStep(call: PluginCall) {
+    if (!isServiceReady()) return call.reject("Player service not ready")
+    val pageStep = call.getInt("pageStep") ?: 0
+    val pageChars = call.getInt("pageChars") ?: 0
+    mainHandler.post {
+      playerNotificationService.ttsEngine?.setPageStep(pageStep, pageChars)
+      call.resolve()
+    }
+  }
+
   @PluginMethod
   fun setRate(call: PluginCall) {
     if (!isServiceReady()) return call.reject("Player service not ready")

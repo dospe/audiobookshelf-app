@@ -75,6 +75,8 @@ interface TTSBook {
   ebookFormat: 'epub' | 'mobi' | 'pdf'
   chapters: TTSChapter[]
   totalChars: number           // pro odhad "délky" a procenta
+  pageStep?: number            // stran na jeden skok next/prev (nastavení čtečky, výchozí 3)
+  pageChars?: number           // odhad znaků na zobrazenou stranu ze čtečky (0 = neznámý)
 }
 
 interface TTSChapter {
@@ -110,6 +112,9 @@ interface AbsTTSPlayerPlugin {
   seekTo(options: { chapterIndex: number, paragraphIndex: number }): Promise<void>
   nextChapter(): Promise<void>
   prevChapter(): Promise<void>
+  // posun o pageStep stran (delta -1 zpět / 1 vpřed), viz A.3
+  seekPages(options: { delta: number }): Promise<void>
+  setPageStep(options: { pageStep: number, pageChars: number }): Promise<void>
   setRate(options: { rate: number }): Promise<void>
   setLanguage(options: { lang: string }): Promise<void>
   getState(): Promise<TTSPlayerState>
@@ -143,7 +148,8 @@ media session na aplikaci je i požadavek Android Auto).
   TTS session se zastaví ExoPlayer (a naopak) — jedna media session, jeden
   audio focus (`AudioFocusRequest`, `AUDIOFOCUS_GAIN`), ducking beze změny.
 - **MediaSession mapping:** play/pause → engine; seek forward/back → ±odstavec;
-  next/prev → kapitola; `setPlaybackSpeed` → TTS rate; metadata z `TTSBook`
+  next/prev → ±N stran (krok z nastavení čtečky, `pageStep` × `pageChars`
+  v `TTSBook`); `setPlaybackSpeed` → TTS rate; metadata z `TTSBook`
   (titul, autor, obálka, kapitola jako "track").
 - **Notifikace:** existující `PlayerNotificationListener` cesta; jen jiný
   MediaDescription adaptér pro TTS režim.
@@ -305,7 +311,7 @@ Zásady:
 | --- | --- |
 | `onPlay` / `onPause` | `play()` / `pause()` |
 | `onStop` | `stop()` + ukončení TTS session (zpět do AUDIO režimu) |
-| `onSkipToNext` / `onSkipToPrevious` | `seekTo(chapter±1, 0)` |
+| `onSkipToNext` / `onSkipToPrevious` | `seekPages(+1)` / `seekPages(-1)` — posun o `pageStep` stran (pdf: kapitola = strana; jinak `pageChars` znaků na stranu, odhad ze čtečky) |
 | `onFastForward` / `onRewind` | `seekParagraph(+1)` / `seekParagraph(-1)` |
 | `onSeekTo(pos)` | pos → znaky → nejbližší odstavec → `seekTo` |
 | `onSetPlaybackSpeed(speed)` | `setPlaybackRate` |

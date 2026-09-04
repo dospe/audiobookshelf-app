@@ -8,12 +8,16 @@ export const state = () => ({
   issues: 0,
   filterData: null,
   numUserPlaylists: 0,
-  ereaderDevices: []
+  ereaderDevices: [],
+  scanningLibraryIds: []
 })
 
 export const getters = {
   getCurrentLibrary: state => {
     return state.libraries.find(lib => lib.id === state.currentLibraryId)
+  },
+  getIsCurrentLibraryScanning: state => {
+    return !!state.currentLibraryId && state.scanningLibraryIds.includes(state.currentLibraryId)
   },
   getCurrentLibraryName: (state, getters) => {
     return getters.getCurrentLibrary?.name || null
@@ -111,6 +115,16 @@ export const mutations = {
     state.lastLoad = 0
     state.currentLibraryId = null
     state.libraries = []
+    state.scanningLibraryIds = []
+  },
+  setLibraryScanning(state, { libraryId, isScanning }) {
+    if (!libraryId) return
+    const isListed = state.scanningLibraryIds.includes(libraryId)
+    if (isScanning && !isListed) {
+      state.scanningLibraryIds.push(libraryId)
+    } else if (!isScanning && isListed) {
+      state.scanningLibraryIds = state.scanningLibraryIds.filter((id) => id !== libraryId)
+    }
   },
   setCurrentLibrary(state, val) {
     state.currentLibraryId = val

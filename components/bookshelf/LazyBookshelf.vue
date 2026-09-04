@@ -445,6 +445,11 @@ export default {
         this.resetEntities()
       }
     },
+    libraryScanComplete(data) {
+      if (!this.currentLibraryId || data?.id !== this.currentLibraryId) return
+      console.log('Library scan complete, reloading shelf')
+      this.resetEntities()
+    },
     libraryItemAdded(libraryItem) {
       console.log('libraryItem added', libraryItem)
       // TODO: Check if item would be on this shelf
@@ -503,6 +508,7 @@ export default {
       }
 
       this.$eventBus.$on('library-changed', this.libraryChanged)
+      this.$eventBus.$on('library-scan-complete', this.libraryScanComplete)
       this.$eventBus.$on('user-settings', this.settingsUpdated)
 
       this.$socket.$on('item_updated', this.libraryItemUpdated)
@@ -525,6 +531,7 @@ export default {
       }
 
       this.$eventBus.$off('library-changed', this.libraryChanged)
+      this.$eventBus.$off('library-scan-complete', this.libraryScanComplete)
       this.$eventBus.$off('user-settings', this.settingsUpdated)
 
       this.$socket.$off('item_updated', this.libraryItemUpdated)

@@ -81,6 +81,12 @@ export default {
     userIsAdminOrUp() {
       return this.$store.getters['user/getIsAdminOrUp']
     },
+    currentLibraryId() {
+      return this.$store.state.libraries.currentLibraryId
+    },
+    isCurrentLibraryScanning() {
+      return this.$store.getters['libraries/getIsCurrentLibraryScanning']
+    },
     navItems() {
       var items = [
         {
@@ -108,6 +114,14 @@ export default {
           text: this.$strings.ButtonUserStats,
           to: '/stats'
         })
+        // Library scans are only allowed for admin users on the server
+        if (this.userIsAdminOrUp && this.currentLibraryId) {
+          items.push({
+            icon: this.isCurrentLibraryScanning ? 'hourglass_top' : 'sync',
+            text: this.isCurrentLibraryScanning ? this.$strings.MessageLibraryScanInProgress : this.$strings.ButtonScanLibrary,
+            action: 'scanLibrary'
+          })
+        }
       }
 
       if (this.$platform !== 'ios') {
@@ -168,6 +182,37 @@ export default {
         this.show = false
         let path = `/library/${this.$store.state.libraries.currentLibraryId}`
         await this.$store.dispatch('user/openWebClient', path)
+      } else if (action === 'scanLibrary') {
+        this.show = false
+        await this.scanLibrary()
+      }
+    },
+    /**
+     * Start a server-side scan of the current library.
+     * The server responds as soon as the scan is queued; progress and results
+     * arrive through the "scan_start" / "scan_complete" socket events.
+     */
+    async scanLibrary() {
+      const libraryId = this.currentLibraryId
+      if (!libraryId) return
+
+      if (!this.$store.state.networkConnected || !this.$store.state.socketConnected) {
+        this.$toast.error(this.$strings.ToastLibraryScanOffline)
+        return
+      }
+
+      if (this.isCurrentLibraryScanning) {
+        this.$toast.info(this.$strings.MessageLibraryScanInProgress)
+        return
+      }
+
+      try {
+        await this.$nativeHttp.post(`/api/libraries/${libraryId}/scan`)
+        this.$store.commit('libraries/setLibraryScanning', { libraryId, isScanning: true })
+        this.$toast.success(this.$strings.ToastLibraryScanStarted)
+      } catch (error) {
+        console.error('[SideDrawer] Failed to start library scan', error)
+        this.$toast.error(this.$strings.ToastLibraryScanFailed)
       }
     },
     clickBackground() {

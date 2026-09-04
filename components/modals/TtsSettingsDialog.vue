@@ -18,6 +18,16 @@
           </div>
         </div>
 
+        <div class="py-2 flex items-center">
+          <p class="pr-4 w-24 text-sm">{{ $strings.LabelReadAloudControlsSide }}</p>
+          <ui-toggle-btns :value="controlsSide || 'right'" name="tts-dialog-controls-side" :items="controlsSideItems" @input="selectControlsSide" />
+        </div>
+
+        <div class="py-2 flex items-center">
+          <p class="pr-4 w-24 text-sm">{{ $strings.LabelReadAloudPageStep }}</p>
+          <ui-toggle-btns :value="pageStep" name="tts-dialog-page-step" :items="pageStepItems" @input="selectPageStep" />
+        </div>
+
         <ui-btn v-if="isNative" small class="w-full mt-4" @click="openSystemTTSSettings">{{ $strings.ButtonOpenSystemTTSSettings }}</ui-btn>
       </div>
     </modals-modal>
@@ -45,7 +55,13 @@ export default {
       type: Object,
       default: () => ({})
     },
-    isNative: Boolean
+    isNative: Boolean,
+    // Read aloud bar layout: playback controls side and pages per rewind/forward step
+    controlsSide: String,
+    pageStep: {
+      type: Number,
+      default: 3
+    }
   },
   data() {
     return {
@@ -76,6 +92,15 @@ export default {
       set(val) {
         this.$emit('input', val)
       }
+    },
+    controlsSideItems() {
+      return [
+        { text: this.$strings.LabelLeft, value: 'left' },
+        { text: this.$strings.LabelRight, value: 'right' }
+      ]
+    },
+    pageStepItems() {
+      return [1, 2, 3, 5, 10].map((pages) => ({ text: String(pages), value: pages }))
     },
     selectedVoiceValue() {
       return this.ttsVoices?.[this.language] || ''
@@ -118,6 +143,12 @@ export default {
           .map((v) => ({ text: v.name, value: v.voiceURI }))
           .sort((a, b) => a.text.localeCompare(b.text))
       }
+    },
+    selectControlsSide(side) {
+      if (side !== (this.controlsSide || 'right')) this.$emit('update:controlsSide', side)
+    },
+    selectPageStep(pages) {
+      if (pages !== this.pageStep) this.$emit('update:pageStep', pages)
     },
     selectEngine(engine) {
       this.showEngineDialog = false
