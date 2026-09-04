@@ -41,6 +41,8 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private var podcastEpisodeLibraryItemMap = mutableMapOf<String, LibraryItemWithEpisode>()
   private var serverConfigIdUsed:String? = null
   private var serverConfigLastPing:Long = 0L
+  private var lastProgressRefresh:Long = 0L
+  private val PROGRESS_REFRESH_INTERVAL = 10000L
   var serverUserMediaProgress:MutableList<MediaProgress> = mutableListOf()
   var serverItemsInProgress = listOf<ItemInProgress>()
   var serverLibraries = listOf<Library>()
@@ -153,6 +155,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       isLibraryPodcastsCached = hashMapOf()
       cachedLibraryEbooks = hashMapOf()
       serverItemsInProgress = listOf()
+      lastProgressRefresh = 0L
       allLibraryPersonalizationsDone = false
       libraryPersonalizationsDone = 0
       return true
@@ -164,14 +167,104 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     if (serverItemsInProgress.isNotEmpty()) {
       cb(serverItemsInProgress)
     } else {
-      apiHandler.getAllItemsInProgress { itemsInProgress ->
-        serverItemsInProgress = itemsInProgress.filter {
+      fetchItemsInProgress(cb)
+    }
+  }
+
+  /**
+   * Load the items in progress from the server. A failed request keeps what is
+   * already cached - the car should not lose its Continue list over one
+   * request that did not go through
+   */
+  private fun fetchItemsInProgress(cb: (List<ItemInProgress>) -> Unit) {
+    apiHandler.getAllItemsInProgress { itemsInProgress ->
+      itemsInProgress?.let { items ->
+        serverItemsInProgress = items.filter {
           val libraryItem = it.libraryItemWrapper as LibraryItem
           libraryItem.checkHasTracks()
         }
-        cb(serverItemsInProgress)
+      }
+      cb(serverItemsInProgress)
+    }
+  }
+
+  /**
+   * Fingerprint of the data Android Auto browse lists are built from, used to
+   * tell whether a refresh actually brought anything new (and the car needs to
+   * be told to reload its cached browse results)
+   */
+  private fun progressSignature(): String {
+    val items = serverItemsInProgress.joinToString(",") {
+      "${it.libraryItemWrapper.id}:${it.episode?.id ?: ""}:${it.progressLastUpdate}"
+    }
+    val progress = serverUserMediaProgress.joinToString(",") { "${it.id}:${it.lastUpdate}" }
+    return "$items|$progress"
+  }
+
+  /**
+   * Re-read the user progress and the items in progress from the server.
+   *
+   * Android Auto is served from data loaded once when the browse tree was
+   * built - listening or reading done on the phone afterwards never reaches
+   * the car without this. [cb] gets true when something actually changed.
+   */
+  fun refreshServerProgress(cb: (Boolean) -> Unit) {
+    val serverConnectionConfig = DeviceManager.serverConnectionConfig
+    if (serverConnectionConfig == null || !DeviceManager.checkConnectivity(ctx)) {
+      return cb(false)
+    }
+    // Browsing a category can trigger several loads in a row - one refresh is enough
+    if (System.currentTimeMillis() - lastProgressRefresh < PROGRESS_REFRESH_INTERVAL) {
+      return cb(false)
+    }
+    lastProgressRefresh = System.currentTimeMillis()
+
+    val signatureBefore = progressSignature()
+    apiHandler.authorize(serverConnectionConfig) { mediaProgress ->
+      // null = the request failed, an empty list = nothing in progress anymore
+      mediaProgress?.let { serverUserMediaProgress = it }
+
+      fetchItemsInProgress {
+        registerInProgressItems()
+        Log.d(tag, "refreshServerProgress: ${serverItemsInProgress.size} items in progress, ${serverUserMediaProgress.size} progress entries")
+        cb(progressSignature() != signatureBefore)
       }
     }
+  }
+
+  /**
+   * Replace the cached progress for an item with a freshly fetched one, so a
+   * resume right after it uses the position instead of the browse-time cache
+   */
+  fun setServerMediaProgress(mediaProgress: MediaProgress) {
+    // Replaced rather than mutated in place: the list is read on the main
+    // thread while browsing and this runs on the network callback thread
+    val remaining = serverUserMediaProgress.filterNot {
+      it.libraryItemId == mediaProgress.libraryItemId && it.episodeId == mediaProgress.episodeId
+    }
+    serverUserMediaProgress = (remaining + mediaProgress).toMutableList()
+  }
+
+  /**
+   * Apply a reading position saved on this device to the cached server progress,
+   * so the Android Auto lists and a later resume see it without waiting for the
+   * next refresh. Unknown items are left out - the next refresh brings them in.
+   */
+  fun updateServerEbookProgress(libraryItemId: String, ebookLocation: String?, ebookProgress: Double, lastUpdate: Long) {
+    val mediaProgress = serverUserMediaProgress.find {
+      it.libraryItemId == libraryItemId && it.episodeId.isNullOrEmpty()
+    } ?: return
+    mediaProgress.ebookLocation = ebookLocation ?: mediaProgress.ebookLocation
+    mediaProgress.ebookProgress = ebookProgress
+    mediaProgress.lastUpdate = lastUpdate
+  }
+
+  /**
+   * Most recently played item that is still in progress - what the car should
+   * resume when asked to play without picking anything
+   */
+  fun getMostRecentInProgressItem(): ItemInProgress? {
+    return serverItemsInProgress.maxByOrNull { it.progressLastUpdate }
   }
 
   /**
@@ -832,20 +925,26 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     }
   }
 
+  /**
+   * Make the items in progress playable from the car: [getById] and
+   * [getPodcastWithEpisodeByEpisodeId] look them up when a browse item is picked
+   */
+  private fun registerInProgressItems() {
+    serverItemsInProgress.forEach {
+      val libraryItem = it.libraryItemWrapper as LibraryItem
+      addServerLibrary(libraryItem)
+
+      if (it.episode != null) {
+        podcastEpisodeLibraryItemMap[it.episode.id] = LibraryItemWithEpisode(it.libraryItemWrapper, it.episode)
+      }
+    }
+  }
+
   fun initializeInProgressItems(cb: () -> Unit) {
     Log.d(tag, "Initializing inprogress items")
 
-    loadItemsInProgressForAllLibraries { itemsInProgress ->
-      itemsInProgress.forEach {
-        val libraryItem = it.libraryItemWrapper as LibraryItem
-        if (serverLibraryItems.find { li -> li.id == libraryItem.id } == null) {
-          serverLibraryItems.add(libraryItem)
-        }
-
-        if (it.episode != null) {
-          podcastEpisodeLibraryItemMap[it.episode.id] = LibraryItemWithEpisode(it.libraryItemWrapper, it.episode)
-        }
-      }
+    loadItemsInProgressForAllLibraries {
+      registerInProgressItems()
       Log.d(tag, "Initializing inprogress items done")
       cb()
     }

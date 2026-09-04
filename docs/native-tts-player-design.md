@@ -469,6 +469,34 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     čtečky použije poslední aplikovaný engine a výchozí hlas (per-jazyk
     hlas žije ve WebView localStorage, stejné omezení jako
     `ttsLanguageForBook`)
+- [x] Synchronizace pozice mezi mobilem a autem (rozečtená kniha v mobilu →
+  poslech téže knihy v autě):
+  - Data pro Android Auto (`serverUserMediaProgress`, `serverItemsInProgress`)
+    se dosud načetla jednou za život služby a už se neobnovila — co uživatel
+    přečetl nebo poslechl v mobilu mezitím, se do auta nedostalo.
+    `MediaManager.refreshServerProgress()` je znovu načte při připojení auta
+    (`onGetRoot`) a při otevření kategorie Continue; throttle 10 s a
+    porovnání otisku dat brání smyčce `notifyChildrenChanged`. Neúspěšný
+    request nechá dosavadní cache být (Continue seznam se nesmí vyprázdnit
+    kvůli jednomu výpadku).
+  - `playTTS` u výběru v autě (bez explicitní pozice) **vždy** obnoví pozici
+    z uloženého progressu — i když engine tutéž knihu už drží. Dřív se
+    seek dělal jen při načtení jiné knihy, takže po `prepareBook` ze čtečky
+    (pozice se resetuje na začátek) auto předčítalo knihu od začátku.
+    Před resume se pozice položky stáhne ze serveru
+    (`GET /api/me/progress/:id`, 3s timeout pingClienta, při chybě se
+    pokračuje s cache).
+  - `savedEbookProgress` bere novější z (server progress, lokální DB) podle
+    `lastUpdate` — stažená kniha čtená offline v mobilu i streamovaná kniha
+    čtená na jiném zařízení tak vedou na stejnou pozici. Celá tabulka
+    lokálního progressu se čte z disku, seznamy si ji proto předávají
+    jednou místo per položku.
+  - Prázdné „play“ z auta (volant, „pusť audioknihu“) pouští naposledy
+    rozposlouchanou položku, případně naposledy rozečtenou e-knihu, když je
+    novější — místo `getFirstItem()` (první náhodná položka v cache).
+    Týká se `onPrepare`, `onPlayFromMediaId` bez id a hledání bez dotazu
+    v `MediaSessionCallback` i `MediaSessionPlaybackPreparer`.
+  - **ověření na DHU / v autě zatím neproběhlo**
 - [ ] F3/F4: iOS engine, CarPlay — **odloženo na neurčito** (není iPhone
   na testování)
 
