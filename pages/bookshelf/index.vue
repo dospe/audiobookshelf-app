@@ -326,11 +326,20 @@ export default {
         }
       })
     },
+    libraryScanComplete(data) {
+      if (!this.currentLibraryId || data?.id !== this.currentLibraryId) return
+      console.log(`[categories] library scan complete so fetching categories`)
+      // Bypass the short fetch throttle so the shelves reflect the scan results
+      this.lastServerFetch = 0
+      this.fetchCategories()
+    },
     initListeners() {
       this.$eventBus.$on('library-changed', this.libraryChanged)
+      this.$eventBus.$on('library-scan-complete', this.libraryScanComplete)
     },
     removeListeners() {
       this.$eventBus.$off('library-changed', this.libraryChanged)
+      this.$eventBus.$off('library-scan-complete', this.libraryScanComplete)
     }
   },
   async mounted() {

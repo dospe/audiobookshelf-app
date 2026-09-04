@@ -56,6 +56,8 @@ class ServerSocket extends EventEmitter {
     this.socket.on('user_updated', this.onUserUpdated.bind(this))
     this.socket.on('user_item_progress_updated', this.onUserItemProgressUpdated.bind(this))
     this.socket.on('playlist_added', this.onPlaylistAdded.bind(this))
+    this.socket.on('scan_start', this.onScanStart.bind(this))
+    this.socket.on('scan_complete', this.onScanComplete.bind(this))
     this.socket.io.on('reconnect_attempt', this.onReconnectAttempt.bind(this))
     this.socket.io.on('reconnect_error', this.onReconnectError.bind(this))
     this.socket.io.on('reconnect_failed', this.onReconnectFailed.bind(this))
@@ -123,6 +125,26 @@ class ServerSocket extends EventEmitter {
     console.log('[SOCKET] User Item Progress Updated', JSON.stringify(payload))
     this.$store.commit('user/updateUserMediaProgress', payload.data)
     this.emit('user_media_progress_updated', payload)
+  }
+
+  /**
+   * Library scan started on the server
+   * @param {{ id: string, type: string, name: string }} data
+   */
+  onScanStart(data) {
+    console.log('[SOCKET] Library scan started', JSON.stringify(data))
+    if (data?.id) this.$store.commit('libraries/setLibraryScanning', { libraryId: data.id, isScanning: true })
+    this.emit('scan_start', data)
+  }
+
+  /**
+   * Library scan finished on the server
+   * @param {{ id: string, type: string, name: string, error: string|null, results: { added: number, updated: number, missing: number }|null }} data
+   */
+  onScanComplete(data) {
+    console.log('[SOCKET] Library scan complete', JSON.stringify(data))
+    if (data?.id) this.$store.commit('libraries/setLibraryScanning', { libraryId: data.id, isScanning: false })
+    this.emit('scan_complete', data)
   }
 
   onPlaylistAdded() {
