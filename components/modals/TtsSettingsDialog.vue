@@ -4,6 +4,24 @@
       <div class="w-full bg-primary rounded-lg border border-fg/20 p-4" @click.stop>
         <p class="text-lg mb-4">{{ $strings.HeaderReadAloudSettings }}</p>
 
+        <div class="py-2 flex items-center">
+          <p class="pr-4 w-24 text-sm">{{ $strings.LabelLanguage }}</p>
+          <ui-toggle-btns :value="language" name="tts-dialog-language" :items="languageItems" @input="selectLanguage" />
+        </div>
+
+        <div class="py-2 flex items-center">
+          <p class="pr-4 w-24 text-sm">{{ $strings.LabelPlaybackSpeed }}</p>
+          <div class="flex items-center">
+            <button type="button" class="inline-flex" :class="{ 'opacity-40': rate <= 0.5 }" :disabled="rate <= 0.5" @click.stop="changeRate(-0.25)">
+              <span class="material-symbols text-2xl">remove</span>
+            </button>
+            <p class="text-sm w-12 text-center">{{ rate }}×</p>
+            <button type="button" class="inline-flex" :class="{ 'opacity-40': rate >= 2.5 }" :disabled="rate >= 2.5" @click.stop="changeRate(0.25)">
+              <span class="material-symbols text-2xl">add</span>
+            </button>
+          </div>
+        </div>
+
         <div v-if="isNative" class="py-2 flex items-center">
           <p class="pr-4 w-24 text-sm">{{ $strings.LabelReadAloudEngine }}</p>
           <div class="flex-grow" @click.stop="showEngineDialog = true">
@@ -56,6 +74,15 @@ export default {
       default: () => ({})
     },
     isNative: Boolean,
+    // Language choices ({ text, value }) and current speaking rate
+    languageItems: {
+      type: Array,
+      default: () => []
+    },
+    rate: {
+      type: Number,
+      default: 1
+    },
     // Read aloud bar layout: playback controls side and pages per rewind/forward step
     controlsSide: String,
     pageStep: {
@@ -143,6 +170,14 @@ export default {
           .map((v) => ({ text: v.name, value: v.voiceURI }))
           .sort((a, b) => a.text.localeCompare(b.text))
       }
+    },
+    selectLanguage(lang) {
+      if (lang && lang !== this.language) this.$emit('update:language', lang)
+    },
+    changeRate(delta) {
+      const newRate = Math.round((this.rate + delta) * 100) / 100
+      if (newRate < 0.5 || newRate > 2.5) return
+      this.$emit('update:rate', newRate)
     },
     selectControlsSide(side) {
       if (side !== (this.controlsSide || 'right')) this.$emit('update:controlsSide', side)

@@ -31,41 +31,28 @@
     </div>
 
     <!-- read aloud (TTS) bar -->
-    <!-- Playback controls sit on the side set in the reader settings so they stay under the thumb when holding the phone one-handed -->
-    <div v-if="showTTSBar && ttsAvailable" class="fixed left-0 w-full z-30 px-3 py-2 flex flex-col bg-bg text-fg" :style="{ bottom: ttsBarBottom, boxShadow: '0px -8px 8px #11111155' }" @touchstart.stop @mousedown.stop @touchend.stop @mouseup.stop>
-      <!-- Language, rate and voice settings; mirrored so they stay away from the playback controls -->
-      <div class="flex items-center mb-1" :class="ttsControlsOnRight ? '' : 'flex-row-reverse'">
-        <ui-toggle-btns v-model="ereaderSettings.ttsLanguage" name="tts-language" :items="ttsLanguageItems" @input="settingsUpdated" />
-        <div class="flex items-center mx-3">
-          <button type="button" class="inline-flex" @click.stop="setTTSRate(-0.25)">
-            <span class="material-symbols text-2xl text-fg">remove</span>
-          </button>
-          <p class="text-sm w-10 text-center">{{ ereaderSettings.ttsRate }}×</p>
-          <button type="button" class="inline-flex" @click.stop="setTTSRate(0.25)">
-            <span class="material-symbols text-2xl text-fg">add</span>
-          </button>
-        </div>
-        <button type="button" :aria-label="$strings.HeaderReadAloudSettings" class="inline-flex" @click.stop="showTTSSettingsDialog = true">
-          <span class="material-symbols text-2xl text-fg">tune</span>
+    <!-- One row: playback controls on the side set in the reader settings (under the thumb when holding the phone one-handed), settings on the other side. Language and rate live in the settings dialog. -->
+    <div v-if="showTTSBar && ttsAvailable" class="fixed left-0 w-full z-30 px-2 py-1.5 flex items-center bg-bg text-fg" :class="ttsControlsOnRight ? 'flex-row-reverse' : ''" :style="{ bottom: ttsBarBottom, boxShadow: '0px -8px 8px #11111155' }" @touchstart.stop @mousedown.stop @touchend.stop @mouseup.stop>
+      <div class="flex items-center">
+        <button type="button" :aria-label="$strings.ButtonSkipBack" class="tts-bar-btn" :class="{ 'opacity-40': ttsSkipInProgress }" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(-1)">
+          <span class="material-symbols text-4xl leading-none">fast_rewind</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonPlay" class="tts-bar-btn" @click.stop="clickTTSPlayPause">
+          <span class="material-symbols fill text-4xl leading-none">{{ ttsState === 'playing' ? 'pause_circle' : 'play_circle' }}</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonSkipForward" class="tts-bar-btn" :class="{ 'opacity-40': ttsSkipInProgress }" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(1)">
+          <span class="material-symbols text-4xl leading-none">fast_forward</span>
+        </button>
+        <button type="button" :aria-label="$strings.ButtonStop" class="tts-bar-btn" :class="{ 'opacity-40': ttsState === 'stopped' }" :disabled="ttsState === 'stopped'" @click.stop="clickTTSStop">
+          <span class="material-symbols text-4xl leading-none">stop</span>
         </button>
       </div>
-      <!-- Playback controls on the side set in the reader settings so they are under the thumb when holding the phone one-handed -->
-      <div class="flex items-center" :class="ttsControlsOnRight ? 'justify-end' : 'justify-start'">
-        <button type="button" :aria-label="$strings.ButtonSkipBack" class="inline-flex flex-col items-center mx-1" :class="ttsSkipInProgress ? 'opacity-40' : ''" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(-1)">
-          <span class="material-symbols text-4xl leading-none text-fg">fast_rewind</span>
-          <span class="text-[10px] font-semibold leading-tight">{{ ttsPageStep }}</span>
-        </button>
-        <button type="button" :aria-label="$strings.ButtonPlay" class="inline-flex mx-1" @click.stop="clickTTSPlayPause">
-          <span class="material-symbols fill text-6xl leading-none text-fg">{{ ttsState === 'playing' ? 'pause_circle' : 'play_circle' }}</span>
-        </button>
-        <button type="button" :aria-label="$strings.ButtonSkipForward" class="inline-flex flex-col items-center mx-1" :class="ttsSkipInProgress ? 'opacity-40' : ''" :disabled="ttsSkipInProgress" @click.stop="clickTTSSkip(1)">
-          <span class="material-symbols text-4xl leading-none text-fg">fast_forward</span>
-          <span class="text-[10px] font-semibold leading-tight">{{ ttsPageStep }}</span>
-        </button>
-        <button type="button" :aria-label="$strings.ButtonStop" class="inline-flex mx-1" :class="ttsState === 'stopped' ? 'opacity-40' : ''" :disabled="ttsState === 'stopped'" @click.stop="clickTTSStop">
-          <span class="material-symbols text-4xl leading-none text-fg">stop</span>
-        </button>
-      </div>
+      <div class="flex-grow" />
+      <!-- Current language and rate at a glance; tap opens the settings -->
+      <button type="button" :aria-label="$strings.HeaderReadAloudSettings" class="tts-bar-btn w-auto px-2" @click.stop="showTTSSettingsDialog = true">
+        <span class="text-xs font-semibold text-fg-muted mr-1.5">{{ ttsLanguageLabel }} · {{ ereaderSettings.ttsRate }}×</span>
+        <span class="material-symbols text-3xl leading-none">tune</span>
+      </button>
     </div>
 
     <!-- table of contents modal -->
@@ -201,7 +188,7 @@
     </modals-fullscreen-modal>
 
     <!-- read aloud (TTS) engine/voice picker -->
-    <modals-tts-settings-dialog v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :controls-side="ereaderSettings.ttsControlsSide" :page-step="ttsPageStep" :is-native="isNativeTTS" @update:engine="setTTSEngine" @update:voice="setTTSVoice" @update:controlsSide="setTTSControlsSide" @update:pageStep="setTTSPageStep" />
+    <modals-tts-settings-dialog v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :language-items="ttsLanguageItems" :rate="ereaderSettings.ttsRate" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :controls-side="ereaderSettings.ttsControlsSide" :page-step="ttsPageStep" :is-native="isNativeTTS" @update:language="setTTSLanguage" @update:rate="setTTSRateValue" @update:engine="setTTSEngine" @update:voice="setTTSVoice" @update:controlsSide="setTTSControlsSide" @update:pageStep="setTTSPageStep" />
   </div>
 </template>
 
@@ -335,6 +322,10 @@ export default {
           value: 'none'
         }
       ]
+    },
+    ttsLanguageLabel() {
+      const item = this.ttsLanguageItems.find((i) => i.value === this.ereaderSettings.ttsLanguage)
+      return item?.text || (this.ereaderSettings.ttsLanguage || '').split('-')[0].toUpperCase()
     },
     ttsLanguageItems() {
       return [
@@ -696,9 +687,17 @@ export default {
       this.settingsUpdated()
     },
     setTTSRate(delta) {
-      const newRate = Math.round((this.ereaderSettings.ttsRate + delta) * 100) / 100
-      if (newRate < 0.5 || newRate > 2.5) return
+      this.setTTSRateValue(Math.round((this.ereaderSettings.ttsRate + delta) * 100) / 100)
+    },
+    setTTSRateValue(rate) {
+      const newRate = Number(rate)
+      if (!(newRate >= 0.5 && newRate <= 2.5)) return
       this.ereaderSettings.ttsRate = newRate
+      this.settingsUpdated()
+    },
+    setTTSLanguage(lang) {
+      if (!lang || lang === this.ereaderSettings.ttsLanguage) return
+      this.ereaderSettings.ttsLanguage = lang
       this.settingsUpdated()
     },
     ttsStateChanged(state) {
@@ -882,3 +881,19 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+/* Read aloud bar buttons: equal round tap targets with same-size icons */
+.tts-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 9999px;
+  color: rgb(var(--color-fg));
+}
+.tts-bar-btn:active {
+  background-color: rgb(var(--color-fg) / 0.1);
+}
+</style>
