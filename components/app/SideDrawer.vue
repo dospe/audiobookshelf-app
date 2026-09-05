@@ -207,8 +207,15 @@ export default {
       }
 
       try {
+        // The library's lastScan before this scan: a changed value later tells the
+        // scan finished even when the socket event was missed in the background
+        const libraryPayload = await this.$nativeHttp.get(`/api/libraries/${libraryId}`).catch(() => null)
+        const library = libraryPayload?.library || libraryPayload
+        // undefined = unknown (request failed); the status check then records the baseline itself
+        const lastScan = libraryPayload ? library?.lastScan || null : undefined
+
         await this.$nativeHttp.post(`/api/libraries/${libraryId}/scan`)
-        this.$store.commit('libraries/setLibraryScanning', { libraryId, isScanning: true })
+        this.$store.commit('libraries/setLibraryScanning', { libraryId, isScanning: true, lastScan })
         this.$toast.success(this.$strings.ToastLibraryScanStarted)
       } catch (error) {
         console.error('[SideDrawer] Failed to start library scan', error)

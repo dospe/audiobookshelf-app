@@ -9,8 +9,25 @@ export const state = () => ({
   filterData: null,
   numUserPlaylists: 0,
   ereaderDevices: [],
-  scanningLibraryIds: []
+  scanningLibraryIds: [],
+  // libraryId -> { startedAt, lastScan }: when the scan was seen starting and the
+  // library's lastScan value before it, for the scan status fallback
+  scanBaseline: {}
 })
+
+// Library scan status fallback: the "scan_complete" socket event is lost while
+// the app is in the background, so while a scan is pending the library is
+// re-read from the server and a changed lastScan means the scan finished.
+// Skip the check right after a scan starts and give up after a long time
+// without an answer.
+const SCAN_STATUS_GRACE_MS = 10 * 1000
+const SCAN_STATUS_TIMEOUT_MS = 15 * 60 * 1000
+
+/** @returns {number|null} lastScan of a GET /api/libraries/:id payload (plain library or { library }) */
+const lastScanOf = (payload) => {
+  const library = payload?.library || payload
+  return library?.lastScan || null
+}
 
 export const getters = {
   getCurrentLibrary: state => {
@@ -101,7 +118,50 @@ export const actions = {
         return false
       })
   },
+  /**
+   * Check the server for library scans that finished without the app
+   * receiving the "scan_complete" socket event (e.g. while in the background).
+   * Clears the scanning state of scans that are no longer running.
+   * @returns {Promise<Array<{ id: string, name: string, timedOut: boolean }>>} scans that just finished
+   */
+  async checkScanStatus({ state, commit, rootState }) {
+    if (!state.scanningLibraryIds.length || !rootState.user?.user) return []
 
+    const now = Date.now()
+    const finished = []
+    for (const libraryId of [...state.scanningLibraryIds]) {
+      const baseline = state.scanBaseline[libraryId] || {}
+      const startedAt = baseline.startedAt || 0
+      if (now - startedAt <= SCAN_STATUS_GRACE_MS) continue
+
+      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}`, { connectTimeout: 10000 }).catch((error) => {
+        console.error('[libraries] checkScanStatus failed to load library', error)
+        return null
+      })
+      const lastScan = lastScanOf(payload)
+
+      let isDone = false
+      let timedOut = false
+      if (lastScan && baseline.lastScan === undefined) {
+        // Scan started elsewhere (socket event only) - take the current value as the baseline
+        commit('setScanBaselineLastScan', { libraryId, lastScan })
+      } else if (lastScan && lastScan !== baseline.lastScan) {
+        // The server stamps lastScan when a scan finishes
+        isDone = true
+      }
+      if (!isDone && now - startedAt > SCAN_STATUS_TIMEOUT_MS) {
+        // No answer for a long time (server unreachable or a very old server) - stop showing the scan as running
+        isDone = true
+        timedOut = true
+      }
+      if (!isDone) continue
+
+      commit('setLibraryScanning', { libraryId, isScanning: false })
+      const library = state.libraries.find((lib) => lib.id === libraryId)
+      finished.push({ id: libraryId, name: library?.name || '', timedOut })
+    }
+    return finished
+  }
 }
 
 export const mutations = {
@@ -116,15 +176,30 @@ export const mutations = {
     state.currentLibraryId = null
     state.libraries = []
     state.scanningLibraryIds = []
+    state.scanBaseline = {}
   },
-  setLibraryScanning(state, { libraryId, isScanning }) {
+  /**
+   * @param {{ libraryId: string, isScanning: boolean, lastScan?: number|null }} payload
+   *   lastScan: the library's lastScan before this scan (null when the library was never scanned), when known
+   */
+  setLibraryScanning(state, { libraryId, isScanning, lastScan }) {
     if (!libraryId) return
     const isListed = state.scanningLibraryIds.includes(libraryId)
     if (isScanning && !isListed) {
       state.scanningLibraryIds.push(libraryId)
+      const baseline = { startedAt: Date.now() }
+      if (lastScan !== undefined) baseline.lastScan = lastScan
+      state.scanBaseline = { ...state.scanBaseline, [libraryId]: baseline }
     } else if (!isScanning && isListed) {
       state.scanningLibraryIds = state.scanningLibraryIds.filter((id) => id !== libraryId)
+      const { [libraryId]: _removed, ...rest } = state.scanBaseline
+      state.scanBaseline = rest
     }
+  },
+  setScanBaselineLastScan(state, { libraryId, lastScan }) {
+    const baseline = state.scanBaseline[libraryId]
+    if (!baseline) return
+    state.scanBaseline = { ...state.scanBaseline, [libraryId]: { ...baseline, lastScan } }
   },
   setCurrentLibrary(state, val) {
     state.currentLibraryId = val

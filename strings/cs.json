@@ -394,6 +394,7 @@
   "ToastLibraryScanComplete": "Prohledání knihovny „{0}“ dokončeno: {1} přidáno, {2} aktualizováno, {3} chybí",
   "ToastLibraryScanError": "Prohledání knihovny „{0}“ selhalo: {1}",
   "ToastLibraryScanFailed": "Prohledávání knihovny se nepodařilo spustit",
+  "ToastLibraryScanFinished": "Prohledání knihovny „{0}“ dokončeno",
   "ToastLibraryScanNoChanges": "Prohledání knihovny „{0}“ dokončeno: beze změn",
   "ToastLibraryScanNoResults": "Prohledání knihovny „{0}“ skončilo bez výsledku",
   "ToastLibraryScanOffline": "Prohledání knihovny vyžaduje připojení k serveru",
