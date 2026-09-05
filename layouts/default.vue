@@ -26,10 +26,15 @@ export default {
       disconnectTime: 0,
       socketDisconnectedTime: 0,
       timeLostFocus: 0,
-      currentLang: null
+      currentLang: null,
+      scanStatusTimer: null
     }
   },
   watch: {
+    hasPendingLibraryScan(newVal) {
+      if (newVal) this.startScanStatusPolling()
+      else this.stopScanStatusPolling()
+    },
     networkConnected: {
       handler(newVal, oldVal) {
         if (!this.hasMounted) {
@@ -73,6 +78,8 @@ export default {
           } else {
             console.log('[default] socket reconnected after ' + timeSinceDisconnect + 'ms')
           }
+          // A "scan_complete" event may have been missed while disconnected
+          this.checkLibraryScanStatus()
         } else {
           console.log('[default] socket disconnected')
           this.socketDisconnectedTime = Date.now()
@@ -92,6 +99,9 @@ export default {
     },
     socketConnected() {
       return this.$store.state.socketConnected
+    },
+    hasPendingLibraryScan() {
+      return this.$store.state.libraries.scanningLibraryIds.length > 0
     },
     user() {
       return this.$store.state.user.user
@@ -283,6 +293,32 @@ export default {
 
       this.$eventBus.$emit('library-scan-complete', data)
     },
+    /**
+     * Fallback for the "scan_complete" socket event, which is lost while the
+     * app is in the background: ask the server whether pending scans still
+     * run and finish the ones that do not.
+     */
+    async checkLibraryScanStatus() {
+      if (!this.hasPendingLibraryScan || !this.networkConnected) return
+      const finished = await this.$store.dispatch('libraries/checkScanStatus')
+      for (const scan of finished) {
+        if (scan.timedOut) {
+          console.warn(`[default] library scan status unknown for ${scan.id}, giving up`)
+        } else {
+          this.$toast.success(this.$getString('ToastLibraryScanFinished', [scan.name]))
+        }
+        this.$eventBus.$emit('library-scan-complete', { id: scan.id, name: scan.name })
+      }
+    },
+    startScanStatusPolling() {
+      if (this.scanStatusTimer) return
+      this.scanStatusTimer = setInterval(() => this.checkLibraryScanStatus(), 10000)
+    },
+    stopScanStatusPolling() {
+      if (!this.scanStatusTimer) return
+      clearInterval(this.scanStatusTimer)
+      this.scanStatusTimer = null
+    },
     async userMediaProgressUpdated(payload) {
       const prog = payload.data // MediaProgress
       await AbsLogger.info({ tag: 'default', message: `userMediaProgressUpdate: Received updated media progress for current user from socket event. Media item id ${payload.id}` })
@@ -361,6 +397,8 @@ export default {
         if (document.visibilityState === 'visible') {
           this.$eventBus.$emit('device-focus-update', true)
         }
+        // Scan events are not delivered in the background - catch up now
+        this.checkLibraryScanStatus()
       } else {
         console.log('⛔️ [default] device visibility: does NOT have focus')
         this.timeLostFocus = Date.now()
@@ -416,6 +454,7 @@ export default {
     this.$socket.off('user_updated', this.userUpdated)
     this.$socket.off('user_media_progress_updated', this.userMediaProgressUpdated)
     this.$socket.off('scan_complete', this.libraryScanComplete)
+    this.stopScanStatusPolling()
   }
 }
 </script>

@@ -401,6 +401,7 @@
   "ToastLibraryScanComplete": "Scan of \"{0}\" complete: {1} added, {2} updated, {3} missing",
   "ToastLibraryScanError": "Scan of \"{0}\" failed: {1}",
   "ToastLibraryScanFailed": "Failed to start library scan",
+  "ToastLibraryScanFinished": "Scan of \"{0}\" finished",
   "ToastLibraryScanNoChanges": "Scan of \"{0}\" complete: no changes",
   "ToastLibraryScanNoResults": "Scan of \"{0}\" finished without results",
   "ToastLibraryScanOffline": "Library scan requires a connection to the server",
