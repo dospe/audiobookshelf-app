@@ -72,8 +72,14 @@ class LocalMediaProgress(
     isFinished = serverMediaProgress.isFinished
     progress = serverMediaProgress.progress
     currentTime = serverMediaProgress.currentTime
-    ebookProgress = serverMediaProgress.ebookProgress
-    ebookLocation = serverMediaProgress.ebookLocation
+    // A server progress without any reading position (e.g. one created by a
+    // per-book reader settings update) is newer only on paper - it must not
+    // erase the position saved on this device
+    val serverHasEbookPosition = !serverMediaProgress.ebookLocation.isNullOrEmpty() || (serverMediaProgress.ebookProgress ?: 0.0) > 0.0
+    if (serverHasEbookPosition || ebookLocation.isNullOrEmpty() && (ebookProgress ?: 0.0) <= 0.0) {
+      ebookProgress = serverMediaProgress.ebookProgress
+      ebookLocation = serverMediaProgress.ebookLocation
+    }
     duration = serverMediaProgress.duration
     lastUpdate = serverMediaProgress.lastUpdate
     finishedAt = serverMediaProgress.finishedAt

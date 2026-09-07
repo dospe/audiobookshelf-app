@@ -43,6 +43,19 @@ import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/Ab
  *     Turn `delta` pages in the reader (negative = backwards). After the
  *     turn the spoken position is moved to the first paragraph of the
  *     visible page with the ttsStartIndex / ttsNativeStartPosition hooks.
+ *   ttsIsParagraphVisible({ location, paragraphIndex, ref }) -> Boolean|null (optional)
+ *     Whether the paragraph is on the visible page / in the viewport, null
+ *     when unknown. `location` and `paragraphIndex` describe a native session
+ *     position, `ref` a paragraph from ttsCollectParagraphs. Play after a
+ *     pause uses it: when the paused paragraph was paged away from, speaking
+ *     continues from the visible page instead of the old spot.
+ *
+ * A native session of the reader's book may still be running or paused in the
+ * background when the reader opens. `this.ttsNativeSessionState` (a promise
+ * set in created) resolves with that session's getState() payload - location,
+ * progress, chapterIndex, paragraphIndex - or null, so the reader can open at
+ * the spoken position; the saved progress in the store lags behind while the
+ * WebView is not running.
  */
 export default {
   data() {
@@ -329,11 +342,18 @@ export default {
       TextToSpeech.stop().catch(() => {})
       this.$emit('tts-state', 'paused')
     },
-    resumeTTS() {
+    async resumeTTS() {
       if (this.ttsState !== 'paused') return
       if (this.ttsUseNative()) {
         this.resumeNativeTTS()
         return
+      }
+      // Paged away from the paused paragraph while paused - continue from the
+      // page on screen instead of jumping back to where the pause happened
+      const paused = this.ttsParagraphs[this.ttsParagraphIndex]
+      if (paused && this.ttsIsParagraphVisible?.({ ref: paused.ref, paragraphIndex: this.ttsParagraphIndex }) === false) {
+        await this.ttsSeekToVisiblePage()
+        if (this.ttsState !== 'paused') return
       }
       this.ttsState = 'playing'
       this.$emit('tts-state', 'playing')
@@ -344,11 +364,16 @@ export default {
       // another reader or from Android Auto) - resuming would speak that book,
       // so only resume this book's session and otherwise start fresh
       const state = await AbsTTSPlayer.getState().catch(() => null)
-      if (state?.libraryItemId && state.libraryItemId === this.libraryItem?.id) {
-        AbsTTSPlayer.play({}).catch(() => {})
-      } else {
+      if (!state?.libraryItemId || state.libraryItemId !== this.libraryItem?.id) {
         this.startTTS()
+        return
       }
+      // Paged away from the paused paragraph while paused - continue from the
+      // page on screen instead of jumping back to where the pause happened
+      if (this.ttsNativeStartPosition && this.ttsIsParagraphVisible?.({ location: state.location, paragraphIndex: state.paragraphIndex }) === false) {
+        await this.ttsSeekToVisiblePage()
+      }
+      AbsTTSPlayer.play({}).catch(() => {})
     },
     stopTTS() {
       const wasActive = this.ttsState !== 'stopped'
@@ -494,18 +519,27 @@ export default {
       return paragraphs
     }
   },
+  created() {
+    // State of a native read aloud session of this book that is running or
+    // paused in the background, null when there is none. Resolved once, before
+    // the reader loads its content, so it can open at the spoken position.
+    // A session of another book is never adopted, otherwise the play button
+    // would resume that book instead of starting this one.
+    this.ttsNativeSessionState = this.ttsUseNative()
+      ? AbsTTSPlayer.getState()
+          .then((state) => (state?.state && state.state !== 'stopped' && state.libraryItemId && state.libraryItemId === this.libraryItem?.id ? state : null))
+          .catch(() => null)
+      : Promise.resolve(null)
+  },
   async mounted() {
-    // Re-sync with a native TTS session that kept playing in the background
-    // after the reader was closed - only when it is this book's session. A
-    // session of another book must not be adopted, otherwise the play button
-    // resumes that book instead of starting this one.
-    if (this.ttsUseNative()) {
-      const state = await AbsTTSPlayer.getState().catch(() => null)
-      if (state?.state && state.state !== 'stopped' && state.libraryItemId && state.libraryItemId === this.libraryItem?.id) {
-        await this.ttsRegisterNativeListeners()
-        this.ttsState = state.state
-        this.$emit('tts-state', state.state)
-      }
+    // Re-attach to a native TTS session that kept playing in the background
+    // after the reader was closed: follow-along events and the play/pause
+    // state, the reader itself positions on the session (ttsNativeSessionState)
+    const state = await this.ttsNativeSessionState
+    if (state) {
+      await this.ttsRegisterNativeListeners()
+      this.ttsState = state.state
+      this.$emit('tts-state', state.state)
     }
   },
   beforeDestroy() {

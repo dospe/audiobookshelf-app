@@ -184,6 +184,11 @@ export default {
         this.updateProgress()
       }
     },
+    /** TTS hook: a paragraph is a page - visible when it is the displayed one */
+    ttsIsParagraphVisible(paragraph) {
+      const pageNum = Number(paragraph.ref ?? paragraph.location)
+      return pageNum >= 1 ? pageNum === this.page : null
+    },
     /** Reconstruct plain text from the pdfjs text layer items */
     ttsTextFromContent(textContent) {
       // Group items into lines by their y coordinate
@@ -243,9 +248,19 @@ export default {
         })
       }
     },
-    loadedEvt() {
+    async loadedEvt() {
       if (this.savedPage && this.savedPage > 0 && this.savedPage <= this.numPages) {
         this.page = this.savedPage
+      }
+      // A read aloud session of this book still running or paused in the
+      // background is further than the saved progress the store knows about
+      if (this.ttsSessionApplied) return
+      this.ttsSessionApplied = true
+      const session = await this.ttsNativeSessionState
+      const sessionPage = Number(session?.location)
+      if (sessionPage >= 1 && sessionPage <= this.numPages && sessionPage !== this.page) {
+        this.page = sessionPage
+        this.updateProgress()
       }
     },
     numPagesLoaded(e) {

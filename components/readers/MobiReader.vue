@@ -68,8 +68,32 @@ export default {
     },
     /** Native TTS hook: scroll along with the spoken paragraph */
     ttsNativeFollow(event) {
-      const el = this.ttsNativeElements?.[event.paragraphIndex]
+      const el = this.ttsNativeElementAt(event.paragraphIndex)
       if (el) this.ttsFollowParagraph({ ref: el })
+    },
+    /**
+     * Paragraph element for a native paragraph index. The elements are
+     * collected on demand when the reader attached to a session started
+     * before it opened (same collection order as ttsExtractBook).
+     */
+    ttsNativeElementAt(index) {
+      if (!(index >= 0)) return null
+      if (!this.ttsNativeElements) {
+        const iframe = document.getElementsByTagName('iframe')[0]
+        const paragraphs = this.ttsCollectHtmlParagraphs(iframe?.contentDocument?.body)
+        if (!paragraphs.length) return null
+        this.ttsNativeElements = paragraphs.map((p) => p.ref)
+      }
+      return this.ttsNativeElements[index] || null
+    },
+    /** TTS hook: whether the paragraph element overlaps the visible part of the scrolled document */
+    ttsIsParagraphVisible(paragraph) {
+      const el = paragraph.ref?.getBoundingClientRect ? paragraph.ref : this.ttsNativeElementAt(paragraph.paragraphIndex ?? Number(paragraph.location))
+      const rect = el?.getBoundingClientRect?.()
+      if (!rect || !this.$el) return null
+      const viewTop = this.$el.scrollTop
+      const viewBottom = viewTop + this.$el.clientHeight
+      return rect.bottom > viewTop && rect.top < viewBottom
     },
     /** TTS hook: a "page" is one screen of the scrolled document */
     ttsEstimatePageChars() {
@@ -177,6 +201,12 @@ export default {
         iFrame.contentDocument.head.appendChild(style)
 
         this.handleIFrameHeight(iFrame)
+
+        // A read aloud session of this book still running or paused in the
+        // background - open at the spoken paragraph
+        const session = await this.ttsNativeSessionState
+        const el = session ? this.ttsNativeElementAt(session.paragraphIndex ?? Number(session.location)) : null
+        if (el) this.ttsFollowParagraph({ ref: el })
       }
       reader.readAsArrayBuffer(buff)
     }
