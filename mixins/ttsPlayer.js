@@ -21,9 +21,9 @@ import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/Ab
  *   ttsFollowParagraph(paragraph) (optional)
  *     Bring the paragraph about to be spoken into view.
  *
- * When the native TTS player plugin is available (Android, F1 of
- * docs/native-tts-player-design.md) the loop instead runs in the native
- * service so it survives the screen turning off. Readers opt in by
+ * When the native TTS player plugin is available (Android F1 and iOS F3 of
+ * docs/native-tts-player-design.md) the loop instead runs natively so it
+ * survives the screen turning off. Readers opt in by
  * implementing these additional hooks:
  *
  *   ttsExtractBook() -> { ebookFormat, chapters } | Promise

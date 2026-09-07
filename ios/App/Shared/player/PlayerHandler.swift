@@ -14,6 +14,9 @@ class PlayerHandler {
     public static func startPlayback(sessionId: String, playWhenReady: Bool, playbackRate: Float) {
         guard let session = Database.shared.getPlaybackSession(id: sessionId) else { return }
         
+        // Audiobook playback and read aloud (TTS) share the audio output and the Now Playing info
+        stopReadAloud()
+        
         // Clean up the existing player
         resetPlayer()
         
@@ -44,8 +47,16 @@ class PlayerHandler {
             if paused {
                 self.player?.pause()
             } else {
+                stopReadAloud()
                 self.player?.play(allowSeekBack: true)
             }
+        }
+    }
+    
+    /// Ends a running read aloud (TTS) session before audio playback starts. The TTS player is main-thread bound.
+    private static func stopReadAloud() {
+        DispatchQueue.runOnMainQueue {
+            TTSPlayer.shared.stop()
         }
     }
     

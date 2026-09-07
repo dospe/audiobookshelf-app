@@ -46,7 +46,7 @@ public class AbsAudioPlayer: CAPPlugin, CAPBridgedPlugin {
         NotificationCenter.default.addObserver(self, selector: #selector(sendSleepTimerSet), name: NSNotification.Name(PlayerEvents.sleepSet.rawValue), object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(sendSleepTimerEnded), name: NSNotification.Name(PlayerEvents.sleepEnded.rawValue), object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(onPlaybackFailed), name: NSNotification.Name(PlayerEvents.failed.rawValue), object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(onLocalMediaProgressUpdate), name: NSNotification.Name(PlayerEvents.localProgress.rawValue), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(onLocalMediaProgressUpdate(_:)), name: NSNotification.Name(PlayerEvents.localProgress.rawValue), object: nil)
 
         self.bridge?.webView?.allowsBackForwardNavigationGestures = true;
         self.bridge?.webView?.scrollView.alwaysBounceVertical = false;
@@ -259,8 +259,10 @@ public class AbsAudioPlayer: CAPPlugin, CAPBridgedPlugin {
         ])
     }
 
-    @objc func onLocalMediaProgressUpdate() {
-        guard let localMediaProgressId = PlayerHandler.getPlaybackSession()?.localMediaProgressId else { return }
+    @objc func onLocalMediaProgressUpdate(_ notification: Notification) {
+        // The read aloud (TTS) player posts the id of the progress it saved; the audiobook player's comes from its session
+        let progressId = notification.userInfo?["localMediaProgressId"] as? String ?? PlayerHandler.getPlaybackSession()?.localMediaProgressId
+        guard let localMediaProgressId = progressId else { return }
         guard let localMediaProgress = Database.shared.getLocalMediaProgress(localMediaProgressId: localMediaProgressId) else { return }
         guard let progressUpdate = try? localMediaProgress.asDictionary() else { return }
         AbsLogger.info(message: "Sending local progress back to the UI")

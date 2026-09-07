@@ -22,7 +22,7 @@
           </div>
         </div>
 
-        <div v-if="isNative" class="py-2 flex items-center">
+        <div v-if="isNative && engines.length" class="py-2 flex items-center">
           <p class="pr-4 w-24 text-sm">{{ $strings.LabelReadAloudEngine }}</p>
           <div class="flex-grow" @click.stop="showEngineDialog = true">
             <ui-text-input :value="selectedEngineLabel" readonly :autofocus="false" append-icon="expand_more" />
@@ -60,9 +60,10 @@ import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import { AbsTTSPlayer } from '@/plugins/capacitor/AbsTTSPlayer'
 
 /**
- * Read aloud (TTS) engine and voice picker. On the native Android player the
- * engines/voices come from the AbsTTSPlayer plugin; on the web fallback path
- * only the voices of the system speech synthesis are selectable.
+ * Read aloud (TTS) engine and voice picker. On the native player the
+ * engines/voices come from the AbsTTSPlayer plugin (iOS has no engine choice,
+ * so the engine row is hidden there); on the web fallback path only the
+ * voices of the system speech synthesis are selectable.
  */
 export default {
   props: {
@@ -161,7 +162,8 @@ export default {
       this.voices = []
       if (this.isNative) {
         const result = await AbsTTSPlayer.getVoices({ engine: this.ttsEngine || '', language: this.language }).catch(() => null)
-        this.voices = (result?.voices || []).map((v) => ({ text: v.name + (v.networkRequired ? ' (online)' : ''), value: v.name })).sort((a, b) => a.text.localeCompare(b.text))
+        // iOS voices carry a display label next to the identifier used as the value
+        this.voices = (result?.voices || []).map((v) => ({ text: (v.label || v.name) + (v.networkRequired ? ' (online)' : ''), value: v.name })).sort((a, b) => a.text.localeCompare(b.text))
       } else {
         const result = await TextToSpeech.getSupportedVoices().catch(() => null)
         const langPrefix = (this.language || '').split('-')[0].toLowerCase()
