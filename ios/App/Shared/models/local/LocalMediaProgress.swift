@@ -162,8 +162,15 @@ extension LocalMediaProgress {
     func updateFromServerMediaProgress(_ serverMediaProgress: MediaProgress) throws {
         try self.realm?.write {
             self.isFinished = serverMediaProgress.isFinished
-            self.ebookLocation = serverMediaProgress.ebookLocation
-            self.ebookProgress = serverMediaProgress.ebookProgress
+            // A server progress without any reading position (e.g. one created by a
+            // per-book reader settings update) is newer only on paper - it must not
+            // erase the position saved on this device (same rule as Android)
+            let serverHasEbookPosition = !(serverMediaProgress.ebookLocation ?? "").isEmpty || (serverMediaProgress.ebookProgress ?? 0) > 0
+            let localHasEbookPosition = !(self.ebookLocation ?? "").isEmpty || (self.ebookProgress ?? 0) > 0
+            if serverHasEbookPosition || !localHasEbookPosition {
+                self.ebookLocation = serverMediaProgress.ebookLocation
+                self.ebookProgress = serverMediaProgress.ebookProgress
+            }
             self.progress = serverMediaProgress.progress
             self.currentTime = serverMediaProgress.currentTime
             self.duration = serverMediaProgress.duration

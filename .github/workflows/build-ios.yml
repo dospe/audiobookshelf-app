@@ -1,0 +1,112 @@
+name: Build iOS IPA
+
+# Builds an unsigned iOS IPA on a macOS runner. There is no Apple signing
+# here: the IPA is meant to be sideloaded with SideStore (or AltStore), which
+# re-signs it with a free Apple ID on the phone - see docs/ios-sideload.md.
+# Every push and pull request uploads the IPA as a workflow artifact; pushes
+# to master also attach it to the "latest-ios" pre-release so it can be
+# downloaded straight from GitHub on the phone.
+
+on:
+  workflow_dispatch:
+  push:
+    paths-ignore:
+      - 'android/**'
+      - 'readme.md'
+  pull_request:
+    paths-ignore:
+      - 'android/**'
+      - 'readme.md'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v4
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: install dependencies
+        run: npm ci
+
+      - name: build Nuxt project
+        run: npm run generate
+
+      - name: copy to iOS project (runs pod install)
+        run: npx cap sync ios
+
+      - name: build unsigned archive
+        run: |
+          set -o pipefail
+          mkdir -p build
+          # Full output goes to the log (uploaded on failure); only errors and the verdict are shown here
+          xcodebuild archive \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            2>&1 | tee build/xcodebuild.log | grep -E --line-buffered 'error:|\*\* (ARCHIVE|BUILD)' || true
+          grep -q '\*\* ARCHIVE SUCCEEDED \*\*' build/xcodebuild.log
+
+      - name: package ipa
+        run: |
+          app="$(ls -d build/App.xcarchive/Products/Applications/*.app | head -n 1)"
+          test -d "$app"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$app" build/Payload/
+          build="$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
+          (cd build && zip -qry "audiobookshelf-ios-${build}.ipa" Payload)
+          ls -la build/*.ipa
+
+      - name: upload ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiobookshelf-ipa
+          path: build/*.ipa
+
+      - name: upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+
+      - name: publish latest iOS release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ipa="$(ls build/*.ipa)"
+          short_sha="$(git rev-parse --short HEAD)"
+          built_at="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          notes="Unsigned iOS build of \`master\` at ${short_sha}, built ${built_at}.
+
+          Open this page on the iPhone, download the IPA and install it with SideStore (or AltStore) - see docs/ios-sideload.md. iOS only; the Android APK is on the \"latest\" release."
+
+          # Recreate the release so the "latest-ios" tag moves to this commit and
+          # only the current IPA stays attached
+          gh release delete latest-ios --yes --cleanup-tag || true
+          gh release create latest-ios "${ipa}" \
+            --target "${GITHUB_SHA}" \
+            --prerelease \
+            --title "Latest iOS test build (${short_sha})" \
+            --notes "${notes}"

@@ -188,8 +188,8 @@ media session na aplikaci je i požadavek Android Auto).
 | --- | --- | --- |
 | **F1** | Plugin `AbsTTSPlayer` + Android `TTSPlaybackEngine` v `PlayerNotificationService`, notifikace, media session, cache, progress sync. Čtečka přepnuta z v1 smyčky na plugin (mixin hooky zůstávají pro extrakci a follow-along). | největší kus práce |
 | **F2** | Android Auto: kategorie „E-knihy" v `BrowseTree`, výběr a ovládání z auta. | malá až střední (staví na F1) |
-| **F3** | iOS `TTSPlayer` + Now Playing + remote commands (background/zamčená obrazovka na iOS). **Odloženo na neurčito** — není k dispozici iPhone na testování (a koupě se neplánuje). | střední |
-| **F4** | CarPlay: entitlement, scéna, šablony (ideálně vč. audioknih). **Odloženo na neurčito** — stejný důvod jako F3. | střední + externí závislost na Apple |
+| **F3** | iOS `TTSPlayer` + Now Playing + remote commands (background/zamčená obrazovka na iOS). **Implementováno** (viz A.10), sideload build přes `build-ios.yml` a `docs/ios-sideload.md`; ověření na zařízení zatím neproběhlo. | střední |
+| **F4** | CarPlay: entitlement, scéna, šablony (ideálně vč. audioknih). **Odloženo na neurčito** — CarPlay audio entitlement uděluje Apple jen placenému účtu po žádosti a sideloadovaný build (free Apple ID) ho nést nemůže. Bez něj funguje jen obrazovka „Právě hraje“ v CarPlay (ovládání, ne browse). | střední + externí závislost na Apple |
 
 Fallback: WebView smyčka z v1 zůstane v kódu jako záloha pro případ, že
 nativní vrstva není dostupná (např. starý build), a pro okamžité čtení bez
@@ -249,9 +249,9 @@ kategorií v Android Auto.
 | `player/BrowseTree.kt` | (F2) kategorie „E-knihy“ z `TTSBookCache.list()` |
 | `MainActivity.kt` | `registerPlugin(AbsTTSPlayer::class.java)` |
 
-**iOS (F3, mimo rozsah F1):** `App/plugins/AbsTTSPlayer.swift` (`CAPBridgedPlugin`),
-`Shared/player/TTSPlayer.swift` — stejný kontrakt pluginu, do té doby na iOS
-běží web fallback z `AbsTTSPlayer.js` (= dnešní chování v1).
+**iOS (F3):** `App/plugins/AbsTTSPlayer.swift` (`CAPBridgedPlugin`),
+`Shared/player/TTSPlayer.swift` — stejný kontrakt pluginu; soubory a chování
+viz A.10.
 
 ### A.2 `TTSPlaybackEngine` (Kotlin) — návrh třídy
 
@@ -526,14 +526,16 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     novější lokální (`syncLocalMediaProgressForUser`, `savedEbookProgress`
     pro Android Auto). Android: `updateFromServerMediaProgress` nepřepíše
     lokální pozici v knize serverovým progressem bez pozice (např. řádek
-    založený jen nastavením).
+    založený jen nastavením); iOS totéž v `LocalMediaProgress.swift`.
   - Formát pozice pro úplnost: `ebookLocation` je epub CFI (adresa v DOM,
     nezávislá na velikosti písma a stránkování), `ebookProgress` poměr
     0–1 (čtečka z epubjs locations po 100 znacích, předčítání z poměru znaků).
     Změna velikosti písma pozici neposouvá, jen přerozdělí stránky.
   - **ověření na zařízení zatím neproběhlo**
-- [ ] F3/F4: iOS engine, CarPlay — **odloženo na neurčito** (není iPhone
-  na testování)
+- [x] F3: iOS engine (viz A.10); **ověření na zařízení zatím neproběhlo**
+- [ ] F4: CarPlay — **odloženo na neurčito** (vyžaduje CarPlay audio
+  entitlement od Apple, tj. placený účet + schválení; sideload build ho
+  nést nemůže)
 
 ### A.9 Testovací plán F1
 
@@ -554,3 +556,44 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
   (`Start-Process`), na zavřeném stdin se ukončí.
 - **Regrese:** přehrávání audioknih (focus, notifikace, Cast) nesmí být
   TTS režimem dotčeno.
+
+### A.10 Stav implementace F3 (iOS)
+
+Port F1 na iOS se stejným kontraktem pluginu — JS vrstva se nemění, jen
+`isNativeTTSPlayerAvailable()` bere i platformu `ios`.
+
+| Soubor | Role |
+| --- | --- |
+| `ios/App/App/plugins/AbsTTSPlayer.swift` | Capacitor bridge (`CAPBridgedPlugin`), stejné metody a eventy jako Kotlin plugin; registrace v `MyViewController.capacitorDidLoad` |
+| `ios/App/Shared/player/TTSPlayer.swift` | engine: `AVSpeechSynthesizer`, chunker (port `splitTextChunks`), session guard přes aktuální utterance, seek po odstavcích/kapitolách/stranách, audio session `.playback/.spokenAudio` (přerušení hovorem pauzne a po konci naváže, odpojení sluchátek pauzne), `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` (mapování dle A.3: previous/next = strany, seek = odstavec, scrubber = odhad času, změna rychlosti) |
+| `ios/App/Shared/player/TTSProgressSyncer.swift` | sync průběhu dle A.6: 15s timer, lokální `LocalMediaProgress` (Realm) + event do WebView přes `AbsAudioPlayer.onLocalMediaProgressUpdate`, server `PATCH api/me/progress/:id` (metered síť po 60 s) |
+| `ios/App/Shared/player/TTSBookCache.swift` | JSON cache + LRU (A.4) v Application Support/`tts-cache` |
+| `ios/App/Shared/models/TTSBook.swift` | `Codable` model `TTSBook/TTSChapter/TTSParagraph/TTSBookSummary` s tolerantním dekódováním payloadu z JS |
+| `ios/App/Shared/player/PlayerHandler.swift` | start audioknihy ukončí běžící TTS session (sdílený audio výstup a Now Playing) a naopak TTS pauzne audio přehrávač |
+
+Rozdíly proti Androidu:
+
+- **Engine/hlas:** iOS má jediný engine — `getEngines()` vrací prázdný seznam
+  a dialog nastavení řádek enginu skryje; `setEngine()` je no-op. Hlasy
+  (`getVoices`) mají jako `name` stabilní `identifier` (jména se opakují
+  napříč kvalitami) a zobrazovaný `label` (např. „Zuzana (Enhanced)“).
+  `openTTSSettings()` otevře aplikaci Nastavení — hlasy se stahují
+  v Zpřístupnění → Předčítaný obsah → Hlasy.
+- **Rychlost:** `AVSpeechUtterance.rate` není násobek; mapování
+  `0.5 * násobek` pod 1× a `0.5 + (násobek − 1) · 0.25` nad 1× (2× ≈ 0.75).
+- **Pauza:** stejně jako na Androidu se po pauze mluví znovu od začátku
+  aktuálního chunku (max ~300 znaků).
+- **Bez Android Auto ekvivalentu:** žádný browse strom, nativní extrakce
+  epubu ani Continue kategorie; `play({ libraryItemId })` pro jinou než
+  připravenou knihu ji vezme z cache a naváže z uložené pozice (lokální
+  DB / server, novější vyhrává) — použije se jen při obnově session ze
+  čtečky.
+- **Bez CarPlay** (F4) — obrazovka „Právě hraje“ v CarPlay ale zobrazí
+  a ovládá běžící předčítání jako jakékoli jiné audio.
+
+Build a distribuce: `.github/workflows/build-ios.yml` (nepodepsaný IPA,
+release `latest-ios`), postup instalace v `docs/ios-sideload.md`.
+
+Neověřeno na zařízení: celá manuální matice A.9 pro iOS (zamčená obrazovka
+30+ min, přerušení hovorem, sluchátka, přepnutí audio↔TTS, kniha bez
+českého hlasu, sync průběhu).

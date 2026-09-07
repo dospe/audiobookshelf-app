@@ -20,6 +20,11 @@
 		3AD4FCED28044E6C006DB301 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AD4FCEC28044E6C006DB301 /* Store.swift */; };
 		3AF1970C2806E2590096F747 /* ApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AF1970B2806E2590096F747 /* ApiClient.swift */; };
 		3AF1970E2806E3CA0096F747 /* AbsAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AF1970D2806E3CA0096F747 /* AbsAudioPlayer.swift */; };
+		7A11C0DE2E6E100000000002 /* AbsTTSPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0DE2E6E100000000001 /* AbsTTSPlayer.swift */; };
+		7A11C0DE2E6E100000000004 /* TTSBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0DE2E6E100000000003 /* TTSBook.swift */; };
+		7A11C0DE2E6E100000000006 /* TTSBookCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0DE2E6E100000000005 /* TTSBookCache.swift */; };
+		7A11C0DE2E6E100000000008 /* TTSPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0DE2E6E100000000007 /* TTSPlayer.swift */; };
+		7A11C0DE2E6E10000000000A /* TTSProgressSyncer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11C0DE2E6E100000000009 /* TTSProgressSyncer.swift */; };
 		3AFCB5E827EA240D00ECCC05 /* NowPlayingInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFCB5E727EA240D00ECCC05 /* NowPlayingInfo.swift */; };
 		4D66B954282EE87C008272D4 /* AbsDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D66B953282EE87C008272D4 /* AbsDownloader.swift */; };
 		4D66B958282EEA14008272D4 /* AbsFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D66B957282EEA14008272D4 /* AbsFileSystem.swift */; };
@@ -94,6 +99,11 @@
 		3AD4FCEC28044E6C006DB301 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		3AF1970B2806E2590096F747 /* ApiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApiClient.swift; sourceTree = "<group>"; };
 		3AF1970D2806E3CA0096F747 /* AbsAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsAudioPlayer.swift; sourceTree = "<group>"; };
+		7A11C0DE2E6E100000000001 /* AbsTTSPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsTTSPlayer.swift; sourceTree = "<group>"; };
+		7A11C0DE2E6E100000000003 /* TTSBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSBook.swift; sourceTree = "<group>"; };
+		7A11C0DE2E6E100000000005 /* TTSBookCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSBookCache.swift; sourceTree = "<group>"; };
+		7A11C0DE2E6E100000000007 /* TTSPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSPlayer.swift; sourceTree = "<group>"; };
+		7A11C0DE2E6E100000000009 /* TTSProgressSyncer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSProgressSyncer.swift; sourceTree = "<group>"; };
 		3AFCB5E727EA240D00ECCC05 /* NowPlayingInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingInfo.swift; sourceTree = "<group>"; };
 		4D66B953282EE87C008272D4 /* AbsDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsDownloader.swift; sourceTree = "<group>"; };
 		4D66B957282EEA14008272D4 /* AbsFileSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsFileSystem.swift; sourceTree = "<group>"; };
@@ -197,6 +207,9 @@
 				E9DFCBFA28C28F4A00B36356 /* AudioPlayerSleepTimer.swift */,
 				3ABF618E2804325C0070250E /* PlayerHandler.swift */,
 				E9E985F728B02D9400957F23 /* PlayerProgress.swift */,
+				7A11C0DE2E6E100000000009 /* TTSProgressSyncer.swift */,
+				7A11C0DE2E6E100000000007 /* TTSPlayer.swift */,
+				7A11C0DE2E6E100000000005 /* TTSBookCache.swift */,
 			);
 			path = player;
 			sourceTree = "<group>";
@@ -219,6 +232,7 @@
 				4D66B953282EE87C008272D4 /* AbsDownloader.swift */,
 				4D66B957282EEA14008272D4 /* AbsFileSystem.swift */,
 				4DF6C7162DB58ABF004059F1 /* AbsLogger.swift */,
+				7A11C0DE2E6E100000000001 /* AbsTTSPlayer.swift */,
 			);
 			path = plugins;
 			sourceTree = "<group>";
@@ -234,6 +248,7 @@
 				4DF74911287105C600AC7814 /* DeviceSettings.swift */,
 				E9D5507428AEF93100C746DD /* PlayerSettings.swift */,
 				6F2516262E68DA3000F40541 /* LogEntry.swift */,
+				7A11C0DE2E6E100000000003 /* TTSBook.swift */,
 				E9D5506328AC1D3F00C746DD /* server */,
 				E9D5506428AC1D5800C746DD /* local */,
 				E9D5506D28AC1E7400C746DD /* download */,
@@ -544,6 +559,11 @@
 				E9D5506A28AC1DF100C746DD /* LocalFile.swift in Sources */,
 				4DF6C7172DB58ABF004059F1 /* AbsLogger.swift in Sources */,
 				3AF1970E2806E3CA0096F747 /* AbsAudioPlayer.swift in Sources */,
+				7A11C0DE2E6E100000000002 /* AbsTTSPlayer.swift in Sources */,
+				7A11C0DE2E6E100000000004 /* TTSBook.swift in Sources */,
+				7A11C0DE2E6E100000000006 /* TTSBookCache.swift in Sources */,
+				7A11C0DE2E6E100000000008 /* TTSPlayer.swift in Sources */,
+				7A11C0DE2E6E10000000000A /* TTSProgressSyncer.swift in Sources */,
 				E9D5506F28AC1E8E00C746DD /* DownloadItem.swift in Sources */,
 				3AD4FCE928043FD7006DB301 /* ServerConnectionConfig.swift in Sources */,
 				E9E985F828B02D9400957F23 /* PlayerProgress.swift in Sources */,
