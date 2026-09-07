@@ -497,6 +497,41 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     Týká se `onPrepare`, `onPlayFromMediaId` bez id a hledání bez dotazu
     v `MediaSessionCallback` i `MediaSessionPlaybackPreparer`.
   - **ověření na DHU / v autě zatím neproběhlo**
+- [x] Synchronizace čtečky s běžící / pozastavenou relací předčítání a se
+  serverem po pobytu na pozadí (regrese hlášená po per-book nastavení):
+  - WebView se o progressu zapsaném jinde (nativní předčítání se zhasnutou
+    obrazovkou, auto, jiné zařízení) dozvídá jen ze socket eventů
+    (`user_updated`, `user_item_progress_updated`) a ty se v pozadí ztrácejí;
+    `user.mediaProgress` se jinak načítá jen při přihlášení. Čtečka se pak
+    otevřela na staré pozici a `loadBookSettingsOverride` vzal zastaralé
+    `ebookSettings: null` za „nic neuloženo“ a smazal lokální cache — kniha se
+    otevřela s výchozí velikostí písma. `Reader.vue` teď před připojením
+    komponenty čtečky (`progressReady`) znovu načte lokální progress z DB a
+    stáhne `GET /api/me/progress/:id` (3 s timeout) do store; u stažené knihy
+    zkopíruje novější pozici ze serveru do lokálního progressu (jen
+    `ebookLocation`/`ebookProgress`). „Žádná nastavení“ ve store platí jen po
+    tomto čerstvém načtení, jinak se použije lokální cache.
+  - Mixin v `created()` zjistí přes `getState()` běžící/pozastavenou relaci
+    téže knihy (`ttsNativeSessionState`); čtečky ji použijí jako cíl otevření
+    (epub: cfi odstavce → kapitola zpřesněná poměrem znaků → poměr sám,
+    pdf: stránka, mobi/dokument: index odstavce) místo uloženého progressu,
+    takže po otevření „nedohání“ předčítání přeskakováním stránek. Lišta
+    předčítání se při převzetí relace zobrazí sama.
+  - Play po pauze: když uživatel mezitím odlistoval jinam (hook
+    `ttsIsParagraphVisible`), předčítání pokračuje od první odstavce viditelné
+    stránky (`ttsSeekToVisiblePage`), ne od místa pauzy. Nativní i WebView cesta.
+  - Server (fork, `MediaProgress.applyProgressUpdate`): PATCH nesoucí jen
+    `ebookSettings` ukládá tiše (`save({ silent: true })`), takže neposouvá
+    `updatedAt`/`lastUpdate` — jinak „vyhrála“ starší serverová pozice nad
+    novější lokální (`syncLocalMediaProgressForUser`, `savedEbookProgress`
+    pro Android Auto). Android: `updateFromServerMediaProgress` nepřepíše
+    lokální pozici v knize serverovým progressem bez pozice (např. řádek
+    založený jen nastavením).
+  - Formát pozice pro úplnost: `ebookLocation` je epub CFI (adresa v DOM,
+    nezávislá na velikosti písma a stránkování), `ebookProgress` poměr
+    0–1 (čtečka z epubjs locations po 100 znacích, předčítání z poměru znaků).
+    Změna velikosti písma pozici neposouvá, jen přerozdělí stránky.
+  - **ověření na zařízení zatím neproběhlo**
 - [ ] F3/F4: iOS engine, CarPlay — **odloženo na neurčito** (není iPhone
   na testování)
 

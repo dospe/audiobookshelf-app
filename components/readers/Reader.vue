@@ -25,7 +25,10 @@
     </div>
 
     <!-- ereader -->
-    <component v-if="readerComponentName" ref="readerComponent" :is="readerComponentName" :url="ebookUrl" :library-item="selectedLibraryItem" :is-local="isLocal" :keep-progress="keepProgress" :showing-toolbar="showingToolbar" :ebook-format="ebookFormat" @touchstart="touchstart" @touchend="touchend" @loaded="readerLoaded" @hook:mounted="readerMounted" @tts-state="ttsStateChanged" />
+    <component v-if="readerComponentName && progressReady" ref="readerComponent" :is="readerComponentName" :url="ebookUrl" :library-item="selectedLibraryItem" :is-local="isLocal" :keep-progress="keepProgress" :showing-toolbar="showingToolbar" :ebook-format="ebookFormat" @touchstart="touchstart" @touchend="touchend" @loaded="readerLoaded" @hook:mounted="readerMounted" @tts-state="ttsStateChanged" />
+    <div v-else-if="readerComponentName" class="w-full h-full flex items-center justify-center">
+      <ui-loading-indicator />
+    </div>
     <div v-else class="w-full h-full flex items-center justify-center px-8">
       <p class="text-center text-fg-muted">{{ $getString('MessageUnsupportedEbookFormat', [ebookFormat || '']) }}</p>
     </div>
@@ -221,6 +224,11 @@ export default {
       comicHasMetadata: false,
       chapters: [],
       isInittingWatchVolume: false,
+      // The reader component mounts once the progress of the book is up to date (refreshItemProgress)
+      progressReady: false,
+      progressRefreshToken: 0,
+      // True when the server copy of the progress in the store was fetched for this opening
+      serverProgressRefreshed: false,
       globalEreaderSettings: null,
       bookSettingsOverride: null,
       bookSettingsSaveTimeout: null,
@@ -250,9 +258,13 @@ export default {
       handler(newVal) {
         if (newVal) {
           this.comicHasMetadata = false
+          this.progressReady = false
           this.registerListeners()
           this.hideToolbar()
+          this.prepareReader()
         } else {
+          this.progressReady = false
+          this.progressRefreshToken++
           this.unregisterListeners()
           this.$showHideStatusBar(true)
           this.showTTSBar = false
@@ -493,8 +505,18 @@ export default {
     keepProgress() {
       return this.$store.state.ereaderKeepProgress
     },
-    /** Server library item id used to store per-book reader settings, null for local-only items */
-    bookSettingsServerId() {
+    /** Downloaded copy of the book, null when reading a streamed book that is not downloaded */
+    localLibraryItem() {
+      if (!this.selectedLibraryItem) return null
+      if (this.isLocal) return this.selectedLibraryItem
+      return this.selectedLibraryItem.localLibraryItem || null
+    },
+    /**
+     * Server library item id the progress and the per-book settings are stored
+     * under, null for local-only items or items of another server (same mapping
+     * as the readers use)
+     */
+    serverLibraryItemId() {
       if (!this.selectedLibraryItem) return null
       if (!this.isLocal) return this.selectedLibraryItem.id
       if (!this.selectedLibraryItem.serverAddress || !this.selectedLibraryItem.libraryItemId) return null
@@ -502,6 +524,9 @@ export default {
         return this.selectedLibraryItem.libraryItemId
       }
       return null
+    },
+    bookSettingsServerId() {
+      return this.serverLibraryItemId
     },
     bookSettingsCacheKey() {
       const id = this.bookSettingsServerId || this.selectedLibraryItem?.id
@@ -583,10 +608,19 @@ export default {
      */
     loadBookSettingsOverride() {
       const serverProgress = this.bookSettingsServerId ? this.$store.getters['user/getUserMediaProgress'](this.bookSettingsServerId) : null
-      if (serverProgress && serverProgress.ebookSettings !== undefined) {
-        const override = serverProgress.ebookSettings && typeof serverProgress.ebookSettings === 'object' ? serverProgress.ebookSettings : null
-        this.cacheBookSettings(override)
-        return override
+      const serverSettings = serverProgress?.ebookSettings && typeof serverProgress.ebookSettings === 'object' ? serverProgress.ebookSettings : null
+      if (serverSettings) {
+        this.cacheBookSettings(serverSettings)
+        return serverSettings
+      }
+      // The store copy of the progress can lag behind the server (socket events
+      // are lost while the app is in the background), so "no settings" in it
+      // only counts when the progress was fetched for this opening - otherwise
+      // it would wipe the settings saved a moment ago and reopen the book with
+      // the global defaults
+      if (serverProgress && serverProgress.ebookSettings === null && this.serverProgressRefreshed) {
+        this.cacheBookSettings(null)
+        return null
       }
       if (!this.bookSettingsCacheKey) return null
       try {
@@ -607,6 +641,77 @@ export default {
     goToChapter(href) {
       this.showTOCModal = false
       this.$refs.readerComponent?.goToChapter(href)
+    },
+    /** Mount the reader once the progress of the book is up to date */
+    async prepareReader() {
+      const token = ++this.progressRefreshToken
+      try {
+        await this.refreshItemProgress(token)
+      } catch (error) {
+        console.error('[Reader] Failed to refresh the item progress', error)
+      }
+      if (token === this.progressRefreshToken && this.show) this.progressReady = true
+    },
+    /**
+     * Bring the progress of the book up to date before the reader mounts.
+     *
+     * The store only hears about progress written elsewhere - native read
+     * aloud with the screen off, the car, another device - through socket
+     * events, and those are lost while the WebView sits in the background. The
+     * reader would then open at a stale position and mistake the stale copy of
+     * the progress for "no per-book settings saved". Local progress is re-read
+     * from the db (read aloud writes it directly), the server copy is fetched
+     * with a short timeout, and a downloaded book takes over a newer reading
+     * position from the server.
+     * @param {number} token - aborts when the reader was closed or reopened meanwhile
+     */
+    async refreshItemProgress(token) {
+      this.serverProgressRefreshed = false
+      const localLibraryItem = this.localLibraryItem
+      const serverLibraryItemId = this.serverLibraryItemId
+
+      if (localLibraryItem) {
+        await this.$store.dispatch('globals/loadLocalMediaProgress')
+        if (token !== this.progressRefreshToken) return
+      }
+
+      if (!serverLibraryItemId || !this.$store.state.user.user || !this.$store.state.networkConnected) return
+
+      const serverProgress = await this.$nativeHttp.get(`/api/me/progress/${serverLibraryItemId}`, { connectTimeout: 3000, readTimeout: 3000 }).catch((error) => {
+        // 404 when the book was never opened on the server, otherwise offline or a slow server
+        console.warn('[Reader] Could not refresh the server progress:', error?.message || error)
+        return null
+      })
+      if (token !== this.progressRefreshToken) return
+      if (!serverProgress?.libraryItemId || serverProgress.libraryItemId !== serverLibraryItemId) return
+
+      this.serverProgressRefreshed = true
+      this.$store.commit('user/updateUserMediaProgress', serverProgress)
+
+      if (!localLibraryItem || !this.keepProgress) return
+      // Downloaded book: the reader resumes from the local progress, so a newer
+      // reading position on the server (read aloud in the car, another device)
+      // is copied into it. Only the ebook position is taken over - audio
+      // progress is reconciled by the player through its own paths.
+      const serverHasEbookPosition = !!serverProgress.ebookLocation || Number(serverProgress.ebookProgress) > 0
+      if (!serverHasEbookPosition) return
+      const localProgress = this.$store.getters['globals/getLocalMediaProgressById'](localLibraryItem.id)
+      if (localProgress && localProgress.lastUpdate >= serverProgress.lastUpdate) return
+      if (localProgress && localProgress.ebookLocation === serverProgress.ebookLocation && localProgress.ebookProgress === serverProgress.ebookProgress) return
+
+      const localResponse = await this.$db
+        .updateLocalEbookProgress({
+          localLibraryItemId: localLibraryItem.id,
+          ebookLocation: serverProgress.ebookLocation || '',
+          ebookProgress: Number(serverProgress.ebookProgress) || 0
+        })
+        .catch((error) => {
+          console.error('[Reader] Failed to copy the server reading position to the local item', error)
+          return null
+        })
+      if (localResponse?.localMediaProgress) {
+        this.$store.commit('globals/updateLocalMediaProgress', localResponse.localMediaProgress)
+      }
     },
     readerMounted() {
       // All readers need the settings for TTS; the epub reader also uses them for styling
@@ -702,6 +807,9 @@ export default {
     },
     ttsStateChanged(state) {
       this.ttsState = state
+      // A read aloud session of this book picked up from the background gets
+      // its controls shown right away instead of after another tap
+      if (state !== 'stopped') this.showTTSBar = true
     },
     next() {
       if (this.$refs.readerComponent && this.$refs.readerComponent.next) {

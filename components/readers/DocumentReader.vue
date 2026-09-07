@@ -144,8 +144,24 @@ export default {
     },
     /** Native TTS hook: scroll along with the spoken paragraph */
     ttsNativeFollow(event) {
-      const el = this.ttsNativeElements?.[event.paragraphIndex]
+      const el = this.ttsNativeElementAt(event.paragraphIndex)
       if (el) this.ttsFollowParagraph({ ref: el })
+    },
+    /** Paragraph element for a native paragraph index - the blocks are collected the same way ttsExtractBook does */
+    ttsNativeElementAt(index) {
+      if (!(index >= 0)) return null
+      return (this.ttsNativeElements || this.blocks)[index] || null
+    },
+    /** TTS hook: whether the paragraph element overlaps the visible part of the scrolled document */
+    ttsIsParagraphVisible(paragraph) {
+      const el = paragraph.ref instanceof Element ? paragraph.ref : this.ttsNativeElementAt(paragraph.paragraphIndex ?? Number(paragraph.location))
+      const viewer = this.$refs.viewer
+      if (!el || !viewer) return null
+      const top = el.offsetTop
+      const bottom = top + el.offsetHeight
+      const viewTop = viewer.scrollTop
+      const viewBottom = viewTop + viewer.clientHeight
+      return bottom > viewTop && top < viewBottom
     },
     /** TTS hook: scroll the spoken paragraph into view */
     ttsFollowParagraph(paragraph) {
@@ -303,7 +319,12 @@ export default {
       await this.render()
       if (!this.errorMessage) {
         await this.$nextTick()
-        if (this.savedBlockIndex > 0) this.scrollToBlock(this.savedBlockIndex)
+        // A read aloud session of this book still running or paused in the
+        // background is further than the saved progress the store knows about
+        const session = await this.ttsNativeSessionState
+        const sessionIndex = session ? Number(session.paragraphIndex ?? session.location) : NaN
+        if (sessionIndex >= 0 && sessionIndex < this.blocks.length) this.scrollToBlock(sessionIndex)
+        else if (this.savedBlockIndex > 0) this.scrollToBlock(this.savedBlockIndex)
         this.updateProgressPercent()
         this.$emit('loaded', { chapters: this.chapters })
       }

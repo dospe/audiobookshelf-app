@@ -304,6 +304,18 @@ export default {
     ttsNativeFollow(event) {
       if (event.location) this.ttsFollowParagraph({ ref: event.location })
     },
+    /** TTS hook: whether the paragraph (an epub cfi) is on the visible page, null while nothing is displayed */
+    ttsIsParagraphVisible(paragraph) {
+      const cfi = paragraph.ref || paragraph.location
+      const location = this.rendition?.currentLocation()
+      if (!cfi || !location?.start?.cfi || !location?.end?.cfi) return null
+      try {
+        const cfiCompare = new EpubCFI()
+        return cfiCompare.compare(cfi, location.start.cfi) >= 0 && cfiCompare.compare(cfi, location.end.cfi) < 0
+      } catch (error) {
+        return null
+      }
+    },
     /**
      * TTS hook: characters on the visible page, from the generated cfi
      * locations (100 characters each). 0 when the locations are not ready.
@@ -475,13 +487,21 @@ export default {
     },
     /** @returns {string|null} cfi for the saved character ratio, needs the locations generated */
     cfiFromSavedProgress() {
-      if (!this.savedEbookProgress || !this.book?.locations?.length()) return null
+      return this.cfiFromRatio(this.savedEbookProgress)
+    },
+    /**
+     * @param {number} ratio - position as a ratio of the whole book
+     * @returns {string|null} cfi at the ratio, null outside (0, 1) or while the locations are not generated
+     */
+    cfiFromRatio(ratio) {
+      const progress = Number(ratio)
+      if (!(progress > 0) || progress >= 1 || !this.book?.locations?.length()) return null
       try {
         // epubjs answers with -1 when the ratio maps outside the locations
-        const cfi = this.book.locations.cfiFromPercentage(this.savedEbookProgress)
+        const cfi = this.book.locations.cfiFromPercentage(progress)
         return typeof cfi === 'string' && cfi.startsWith('epubcfi') ? cfi : null
       } catch (error) {
-        console.error('[EpubReader] Failed to map the saved progress to a cfi', error)
+        console.error('[EpubReader] Failed to map the progress ratio to a cfi', error)
         return null
       }
     },
@@ -508,15 +528,38 @@ export default {
      * @returns {string|null} cfi or spine href to display, null to start at the beginning
      */
     getDisplayTarget() {
-      const savedLocation = this.savedEbookLocation
+      return this.resolveDisplayTarget(this.savedEbookLocation, this.savedEbookProgress)
+    },
+    /**
+     * Where a read aloud session of this book that is still running or paused
+     * in the background is right now: the spoken paragraph cfi (reader
+     * extraction), the chapter refined with the spoken character ratio (native
+     * extraction has no paragraph cfis) or the ratio alone. The saved progress
+     * can lag behind the engine while the WebView was not running, so this
+     * comes first when a session exists.
+     * @param {object|null} session - ttsNativeSessionState payload
+     * @returns {string|null} cfi or spine href to display
+     */
+    getSessionDisplayTarget(session) {
+      if (!session) return null
+      const location = session.location ? String(session.location) : null
+      const progress = Number(session.progress)
+      return this.resolveDisplayTarget(location, progress > 0 && progress < 1 ? progress : 0)
+    },
+    /**
+     * @param {string|null} savedLocation - cfi or spine href
+     * @param {number} savedProgress - ratio of the whole book, 0 when unknown
+     * @returns {string|null} cfi or spine href to display, null to start at the beginning
+     */
+    resolveDisplayTarget(savedLocation, savedProgress) {
       // A library item can hold ebook files of several formats sharing one
       // progress - a page number saved by the pdf reader is no spine target
       const isEpubLocation = savedLocation && (savedLocation.startsWith('epubcfi') || isNaN(savedLocation))
       const section = isEpubLocation ? this.getSpineSection(savedLocation) : null
-      if (!section) return this.cfiFromSavedProgress()
+      if (!section) return this.cfiFromRatio(savedProgress)
       if (!this.isChapterGranularityLocation(savedLocation)) return savedLocation
 
-      const progressCfi = this.cfiFromSavedProgress()
+      const progressCfi = this.cfiFromRatio(savedProgress)
       if (progressCfi && this.getSpineSection(progressCfi)?.index === section.index) return progressCfi
       return savedLocation
     },
@@ -596,13 +639,17 @@ export default {
           this.totalLocations = reader.book.locations.length()
         }
 
-        let displayCfi = this.getDisplayTarget()
-        if (!displayCfi && this.savedEbookProgress && !reader.book.locations.length()) {
-          // Only the character ratio of the saved progress is usable (read
-          // aloud extraction without cfis) - generating the locations maps it
-          // to a position, worth the wait to not restart the book
+        // A read aloud session of this book still running or paused in the
+        // background is the most current position - the saved progress in the
+        // store lags behind it while the WebView was not running
+        const ttsSession = await this.ttsNativeSessionState
+        let displayCfi = this.getSessionDisplayTarget(ttsSession) || this.getDisplayTarget()
+        if (!displayCfi && (this.savedEbookProgress || Number(ttsSession?.progress) > 0) && !reader.book.locations.length()) {
+          // Only the character ratio of the position is usable (read aloud
+          // extraction without cfis) - generating the locations maps it to a
+          // position, worth the wait to not restart the book
           await this.generateLocations()
-          displayCfi = this.getDisplayTarget()
+          displayCfi = this.getSessionDisplayTarget(ttsSession) || this.getDisplayTarget()
         }
         // Some epubs have spine entries referencing missing manifest items
         // (e.g. a dangling cover page). Displaying those fails and leaves the
