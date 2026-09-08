@@ -612,8 +612,10 @@ Rozdíly proti Androidu:
 - **Bez CarPlay** (F4) — obrazovka „Právě hraje“ v CarPlay ale zobrazí
   a ovládá běžící předčítání jako jakékoli jiné audio.
 
-Build a distribuce: `.github/workflows/build-ios.yml` (nepodepsaný IPA,
-release `latest-ios`), postup instalace v `docs/ios-sideload.md`.
+Build a distribuce: `.github/workflows/build-ios.yml` (nepodepsaný IPA
+`audiobookshelf-ios.ipa` + SideStore source feed `sidestore-source.json`
+z `scripts/make-sidestore-source.py`, release `latest-ios`), postup instalace
+přes iloader/SideStore v `docs/ios-sideload.md`.
 
 Neověřeno na zařízení: celá manuální matice A.9 pro iOS (zamčená obrazovka
 30+ min, přerušení hovorem, sluchátka, přepnutí audio↔TTS, kniha bez
