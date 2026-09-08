@@ -1,18 +1,29 @@
 <template>
-  <div ref="wrapper" class="modal modal-bg w-full h-full max-h-screen fixed top-0 left-0 bg-primary bg-opacity-75 flex items-center justify-center z-50 opacity-0">
-    <div class="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-black to-transparent opacity-90 pointer-events-none" />
+  <!-- The root stays in place as an empty placeholder; the wrapper is detached on mount and appended to document.body while the modal is shown -->
+  <div class="hidden">
+    <div ref="wrapper" class="modal modal-bg w-full h-full max-h-screen fixed top-0 left-0 bg-primary bg-opacity-75 flex items-center justify-center z-50 opacity-0">
+      <div class="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-black to-transparent opacity-90 pointer-events-none" />
 
-    <div class="absolute z-40 top-11 right-4 h-10 w-10 flex items-center justify-center cursor-pointer text-white hover:text-gray-300" @click="show = false">
-      <span class="material-symbols text-4xl">close</span>
-    </div>
-    <slot name="outer" />
-    <div ref="content" style="min-height: 200px" class="relative text-fg max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth }" v-click-outside="clickBg">
-      <slot />
+      <div class="absolute z-40 top-11 right-4 h-10 w-10 flex items-center justify-center cursor-pointer text-white hover:text-gray-300" @click="show = false">
+        <span class="material-symbols text-4xl">close</span>
+      </div>
+      <slot name="outer" />
+      <div ref="content" style="min-height: 200px" class="relative text-fg max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth }" v-click-outside="clickBg">
+        <slot />
+      </div>
     </div>
   </div>
 </template>
 
 <script>
+/**
+ * Modal shown on top of the app. The wrapper element is moved to document.body
+ * while shown, so it is not a child of the component root in the DOM. The root
+ * is an empty placeholder that stays where the modal is used: Vue may move
+ * the placeholder when it reorders sibling nodes of the parent (e.g. a v-if
+ * sibling appearing after an async load), but it never re-inserts the wrapper
+ * into the page - that used to leave an unresponsive overlay over the page.
+ */
 export default {
   props: {
     value: Boolean,
@@ -108,6 +119,9 @@ export default {
   },
   beforeDestroy() {
     this.$eventBus.$off('close-modal', this.closeModalEvt)
+    // Destroyed while shown (e.g. the page using the modal was left): the wrapper
+    // lives in document.body, where Vue does not remove it, so hide it here
+    if (this.el?.parentNode) this.setHide()
   }
 }
 </script>
