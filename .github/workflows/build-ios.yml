@@ -3,9 +3,16 @@ name: Build iOS IPA
 # Builds an unsigned iOS IPA on a macOS runner. There is no Apple signing
 # here: the IPA is meant to be sideloaded with SideStore (or AltStore), which
 # re-signs it with a free Apple ID on the phone - see docs/ios-sideload.md.
-# Every push and pull request uploads the IPA as a workflow artifact; pushes
-# to master also attach it to the "latest-ios" pre-release so it can be
-# downloaded straight from GitHub on the phone.
+#
+# Every push and pull request uploads the IPA and a SideStore source feed as
+# a workflow artifact. Pushes to master also attach both to the "latest-ios"
+# pre-release: the IPA under a fixed name and the source JSON pointing at it,
+# so SideStore lists every new master build as an update.
+#
+# Version numbers: CFBundleShortVersionString becomes <major>.<minor>.<run
+# number> of the MARKETING_VERSION in the Xcode project and CFBundleVersion
+# the run number, so every build has a distinct version for SideStore to
+# detect and the About screen shows which build is installed.
 
 on:
   workflow_dispatch:
@@ -24,6 +31,11 @@ permissions:
 concurrency:
   group: build-ios-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  IPA_NAME: audiobookshelf-ios.ipa
+  SOURCE_NAME: sidestore-source.json
+  RELEASE_TAG: latest-ios
 
 jobs:
   build:
@@ -50,6 +62,9 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
+          base_version="$(sed -n 's/.*MARKETING_VERSION = \([0-9]*\.[0-9]*\).*/\1/p' ios/App/App.xcodeproj/project.pbxproj | head -n 1)"
+          marketing_version="${base_version:-0.0}.${{ github.run_number }}"
+          echo "Building version ${marketing_version} (${{ github.run_number }})"
           # Full output goes to the log (uploaded on failure); only errors and the verdict are shown here
           xcodebuild archive \
             -workspace ios/App/App.xcworkspace \
@@ -61,26 +76,47 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="${marketing_version}" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             2>&1 | tee build/xcodebuild.log | grep -E --line-buffered 'error:|\*\* (ARCHIVE|BUILD)' || true
           grep -q '\*\* ARCHIVE SUCCEEDED \*\*' build/xcodebuild.log
 
-      - name: package ipa
+      - name: package ipa and SideStore source
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           app="$(ls -d build/App.xcarchive/Products/Applications/*.app | head -n 1)"
           test -d "$app"
-          rm -rf build/Payload
-          mkdir -p build/Payload
+          rm -rf build/Payload build/release
+          mkdir -p build/Payload build/release
           cp -R "$app" build/Payload/
-          build="$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
-          (cd build && zip -qry "audiobookshelf-ios-${build}.ipa" Payload)
-          ls -la build/*.ipa
+          (cd build && zip -qry "release/${IPA_NAME}" Payload)
 
-      - name: upload ipa
+          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Info.plist")"
+          build_number="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$app/Info.plist")"
+          ipa="build/release/${IPA_NAME}"
+          # The feed always points at the master release - on other branches it
+          # only validates that the generation works
+          python3 scripts/make-sidestore-source.py \
+            --version "${version}" \
+            --build-number "${build_number}" \
+            --date "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            --commit "$(git rev-parse --short HEAD)" \
+            --download-url "${REPO_URL}/releases/download/${RELEASE_TAG}/${IPA_NAME}" \
+            --size "$(stat -f%z "${ipa}")" \
+            --sha256 "$(shasum -a 256 "${ipa}" | cut -d' ' -f1)" \
+            --icon-url "https://raw.githubusercontent.com/${REPOSITORY}/master/ios/App/App/Assets.xcassets/Icons.appiconset/icon-512.png" \
+            --website "${REPO_URL}" \
+            > "build/release/${SOURCE_NAME}"
+          python3 -m json.tool "build/release/${SOURCE_NAME}"
+          ls -la build/release
+
+      - name: upload ipa and source
         uses: actions/upload-artifact@v4
         with:
           name: audiobookshelf-ipa
-          path: build/*.ipa
+          path: build/release/*
 
       - name: upload build log
         if: failure()
@@ -94,19 +130,31 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          ipa="$(ls build/*.ipa)"
+          app="$(ls -d build/App.xcarchive/Products/Applications/*.app | head -n 1)"
+          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Info.plist")"
           short_sha="$(git rev-parse --short HEAD)"
           built_at="$(date -u '+%Y-%m-%d %H:%M UTC')"
-          notes="Unsigned iOS build of \`master\` at ${short_sha}, built ${built_at}.
+          source_url="${REPO_URL}/releases/download/${RELEASE_TAG}/${SOURCE_NAME}"
+          ipa_url="${REPO_URL}/releases/download/${RELEASE_TAG}/${IPA_NAME}"
+          notes="Unsigned iOS build ${version} of \`master\` at ${short_sha}, built ${built_at}. iOS only; the Android APK is on the \"latest\" release.
 
-          Open this page on the iPhone, download the IPA and install it with SideStore (or AltStore) - see docs/ios-sideload.md. iOS only; the Android APK is on the \"latest\" release."
+          Install with SideStore (see docs/ios-sideload.md). Either add this source once and update from it:
 
-          # Recreate the release so the "latest-ios" tag moves to this commit and
-          # only the current IPA stays attached
-          gh release delete latest-ios --yes --cleanup-tag || true
-          gh release create latest-ios "${ipa}" \
+          - Source URL: \`${source_url}\`
+          - One-tap add (paste into Safari): \`sidestore://source?url=${source_url}\`
+
+          or install this build directly:
+
+          - One-tap install (paste into Safari): \`sidestore://install?url=${ipa_url}\`
+          - Or download the IPA below and open it in SideStore."
+
+          # Recreate the release so the tag moves to this commit and only the
+          # current IPA and source stay attached
+          gh release delete "${RELEASE_TAG}" --yes --cleanup-tag || true
+          gh release create "${RELEASE_TAG}" "build/release/${IPA_NAME}" "build/release/${SOURCE_NAME}" \
             --target "${GITHUB_SHA}" \
             --prerelease \
-            --title "Latest iOS test build (${short_sha})" \
+            --title "Latest iOS test build ${version} (${short_sha})" \
             --notes "${notes}"
