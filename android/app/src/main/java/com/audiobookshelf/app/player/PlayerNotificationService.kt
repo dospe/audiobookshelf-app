@@ -432,17 +432,33 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   /**
-   * TTS language for a natively extracted book: the epub dc:language, then the
-   * library item metadata language, then the current engine language. The
-   * reader extraction uses the user-picked reader setting instead, but that
-   * lives in WebView localStorage - the book's own language is the best
-   * native guess.
+   * TTS language for a natively extracted book: the library item metadata
+   * language (editable on the server), then the epub dc:language, then the
+   * current engine language - the same order the reader uses for the read
+   * aloud language of a book. The reader also applies the user's per-book
+   * and default language, but those live in the WebView - the book's own
+   * language is the best native guess.
    */
   private fun ttsLanguageForBook(epubLanguage: String?, libraryItem: LibraryItem): String {
     val metadataLanguage = (libraryItem.media.metadata as? BookMetadata)?.language
-    val language = epubLanguage?.trim().takeUnless { it.isNullOrEmpty() }
-      ?: metadataLanguage?.trim().takeUnless { it.isNullOrEmpty() }
+    val language = bookLanguageTag(metadataLanguage) ?: bookLanguageTag(epubLanguage)
     return language ?: ttsEngine?.language ?: "en-US"
+  }
+
+  /**
+   * Language tag for a language a book declares: a tag ("cs-CZ", "en_GB"), an
+   * ISO code ("cs", "ces") or a language name ("Czech"). Null when unusable -
+   * a name the engine cannot resolve would make it refuse the language.
+   */
+  private fun bookLanguageTag(raw: String?): String? {
+    // Some books list several languages ("cs; en") - the first one is the book's
+    val value = raw?.trim()?.split(';', ',')?.firstOrNull()?.trim()?.takeUnless { it.isEmpty() } ?: return null
+    if (Regex("^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$").matches(value)) return value.replace('_', '-')
+    return when (value.lowercase()) {
+      "czech", "čeština", "cestina", "česky", "cesky" -> "cs-CZ"
+      "english", "angličtina", "anglictina" -> "en-US"
+      else -> null
+    }
   }
 
   // While an Android Auto pick is downloading/extracting, the shared media

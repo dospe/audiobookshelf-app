@@ -439,7 +439,12 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
     /// The voice for the selected identifier, else the default voice of the language, else any voice of that language
     private func resolveVoice() -> AVSpeechSynthesisVoice? {
         if !voiceIdentifier.isEmpty, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
-            return voice
+            // A voice of another language would override the language of the
+            // book (a voice kept from a book in another language)
+            if TTSPlayer.sameLanguage(voice.language, language) {
+                return voice
+            }
+            AbsLogger.info(message: "TTSPlayer: Voice \(voiceIdentifier) is not a \(language) voice, using the language default")
         }
         if let voice = AVSpeechSynthesisVoice(language: language) {
             return voice
@@ -454,6 +459,16 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
             listener?.onTTSError("Language \(language) is not supported")
         }
         return nil // system default voice
+    }
+
+    /// Whether two language tags ("cs-CZ", "cs_CZ", "cs") name the same language
+    static func sameLanguage(_ a: String, _ b: String) -> Bool {
+        return languagePrefix(a) == languagePrefix(b)
+    }
+
+    private static func languagePrefix(_ tag: String) -> String {
+        let normalized = tag.replacingOccurrences(of: "_", with: "-")
+        return normalized.split(separator: "-").first.map { String($0).lowercased() } ?? normalized.lowercased()
     }
 
     /// AVSpeechUtterance rates are not a multiplier: the default (0.5) is normal

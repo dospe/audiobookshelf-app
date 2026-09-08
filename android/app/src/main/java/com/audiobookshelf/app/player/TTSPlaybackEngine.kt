@@ -36,6 +36,25 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
   companion object {
     const val MAX_CHUNK_LENGTH = 300
     const val CHARS_PER_SECOND = 15.0 // rough speaking speed at 1x for time estimates
+
+    /**
+     * ISO 639-2 code of the locale language ("ces"), or the language as is
+     * when it has no ISO 639-2 code. Engines report voice locales with 2- or
+     * 3-letter codes ("cs" vs "ces"), so languages compare on this.
+     */
+    fun iso3Language(locale: Locale): String {
+      return try { locale.isO3Language.lowercase() } catch (e: Exception) { locale.language.lowercase() }
+    }
+
+    /** Whether two locales name the same language, whatever the region or the code length */
+    fun sameLanguage(a: Locale, b: Locale): Boolean {
+      if (a.language.isEmpty() || b.language.isEmpty()) return false
+      return a.language.equals(b.language, ignoreCase = true) || iso3Language(a) == iso3Language(b)
+    }
+
+    fun sameLanguage(locale: Locale, languageTag: String): Boolean {
+      return sameLanguage(locale, Locale.forLanguageTag(languageTag))
+    }
   }
 
   private val tag = "TTSPlaybackEngine"
@@ -435,21 +454,46 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
   private fun applyConfig() {
     val engine = tts ?: return
     engine.setSpeechRate(rate)
-    val result = engine.setLanguage(Locale.forLanguageTag(language))
-    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-      Log.w(tag, "Language $language not supported by the TTS engine")
-      listener.onTTSError("Language $language is not supported")
+    val locale = Locale.forLanguageTag(language)
+    // Broken engines can throw from the voices getter
+    val voices = try { engine.voices } catch (e: Exception) { null }
+
+    // A refused language leaves the engine speaking with its own default
+    // language (typically English), so every fallback is tried before giving up
+    var result = engine.setLanguage(locale)
+    if (isLanguageFailure(result) && locale.country.isNotEmpty()) {
+      // The regional variant (cs-CZ) can be missing while the language (cs) is installed
+      result = engine.setLanguage(Locale(locale.language))
     }
-    if (voiceName.isNotEmpty()) {
-      // Broken engines can throw from the voices getter
-      val voice = try { engine.voices } catch (e: Exception) { null }?.find { it.name == voiceName }
-      if (voice != null) {
-        engine.setVoice(voice)
-      } else {
-        // Silent fallback - setLanguage above already selected a working default
-        Log.w(tag, "Voice $voiceName not found, using language default")
+    if (isLanguageFailure(result)) {
+      // Engines that refuse setLanguage yet list a voice of the language speak with that voice
+      val languageVoice = voices?.find { sameLanguage(it.locale, locale) }
+      if (languageVoice != null) {
+        Log.w(tag, "Language $language refused by the TTS engine (result=$result), using voice ${languageVoice.name}")
+        engine.setVoice(languageVoice)
+        result = TextToSpeech.LANG_AVAILABLE
       }
     }
+    if (isLanguageFailure(result)) {
+      Log.w(tag, "Language $language not supported by the TTS engine (result=$result)")
+      listener.onTTSError("Language $language is not supported")
+    }
+
+    if (voiceName.isNotEmpty()) {
+      val voice = voices?.find { it.name == voiceName }
+      when {
+        // Silent fallback - setLanguage above already selected a working default
+        voice == null -> Log.w(tag, "Voice $voiceName not found, using language default")
+        // A voice of another language would override the language just set
+        // (a voice kept from a book in another language)
+        !sameLanguage(voice.locale, locale) -> Log.w(tag, "Voice $voiceName is not a $language voice, using language default")
+        else -> engine.setVoice(voice)
+      }
+    }
+  }
+
+  private fun isLanguageFailure(result: Int): Boolean {
+    return result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED
   }
 
   private fun setState(newState: TTSState) {
