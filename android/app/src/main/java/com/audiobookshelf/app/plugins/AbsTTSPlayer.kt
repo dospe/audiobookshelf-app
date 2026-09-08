@@ -17,6 +17,7 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import org.json.JSONArray
+import java.util.Locale
 
 /**
  * Capacitor bridge for the native read aloud (TTS) player.
@@ -267,11 +268,11 @@ class AbsTTSPlayer : Plugin() {
     withEnumerationTTS(enginePackage) { tts, ready ->
       if (!ready) return@withEnumerationTTS call.reject("TTS engine failed to initialize")
       val voices = JSONArray()
-      // Match on the ISO language part only ("cs") so all regional variants are listed
-      val langPrefix = language?.substringBefore('-')?.lowercase()
+      // Match on the language only ("cs") so all regional variants are listed
+      val filterLocale = language?.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it) }
       val engineVoices = try { tts?.voices } catch (e: Exception) { null }
       engineVoices?.forEach { voice ->
-        if (langPrefix != null && voice.locale.language.lowercase() != langPrefix) return@forEach
+        if (filterLocale != null && !TTSPlaybackEngine.sameLanguage(voice.locale, filterLocale)) return@forEach
         val voiceObj = JSObject()
         voiceObj.put("name", voice.name)
         voiceObj.put("lang", voice.locale.toLanguageTag())

@@ -467,8 +467,29 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     `getSupportedVoices()`, resolvuje se čerstvě), výběr enginu se skryje
   - Limitace: studený start z Android Auto u knihy nikdy nepuštěné ze
     čtečky použije poslední aplikovaný engine a výchozí hlas (per-jazyk
-    hlas žije ve WebView localStorage, stejné omezení jako
-    `ttsLanguageForBook`)
+    hlas žije ve WebView, stejné omezení jako `ttsLanguageForBook`)
+- [x] Výchozí nastavení čtečky/předčítání a jazyk per kniha:
+  - Globální nastavení (`ereaderSettings`) žije ve store modulu
+    `store/ereader.js` a ukládá se přes `@capacitor/preferences`
+    (`$localStore.setEreaderSettings`), ne ve WebView localStorage, které
+    systém může zahodit — ztráta nastavení tiše vracela předčítání na
+    vestavěný výchozí jazyk. Stará hodnota z localStorage se při prvním
+    načtení zmigruje; chybějící jazyk se odvodí z jazyka aplikace.
+  - Upravuje se v Nastavení aplikace (sekce „Čtečka e-knih a předčítání“)
+    sdíleným formulářem `components/readers/EreaderSettingsForm.vue`, který
+    používá i modal nastavení ve čtečce.
+  - Jazyk předčítání je per kniha (`BOOK_SETTING_KEYS` v `Reader.vue`):
+    výchozí z metadat knihy — metadata ABS, pak `dc:language` epubu
+    (událost `loaded` čtečky), mapování `ttsLanguageForBookLanguage` v
+    `utils/ereaderSettings.js` — jinak globální výchozí. Ruční změna ve
+    čtečce se ukládá jako per-book override (`ebookSettings.ttsLanguage`),
+    „Použít pro všechny knihy“ ji povýší na výchozí.
+  - Nativní pojistky proti přepnutí do angličtiny: `applyConfig()` po
+    neúspěšném `setLanguage` zkusí jazyk bez regionu a pak hlas daného
+    jazyka z `engine.voices`; uložený hlas jiného jazyka se ignoruje
+    (Android `applyConfig`, iOS `resolveVoice`), jazyky se porovnávají přes
+    `TTSPlaybackEngine.sameLanguage` (2- i 3-písmenné kódy hlasů).
+    `ttsLanguageForBook` normalizuje název jazyka („Czech“) na tag.
 - [x] Synchronizace pozice mezi mobilem a autem (rozečtená kniha v mobilu →
   poslech téže knihy v autě):
   - Data pro Android Auto (`serverUserMediaProgress`, `serverItemsInProgress`)

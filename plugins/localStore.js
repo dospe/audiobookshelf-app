@@ -144,6 +144,24 @@ class LocalStorage {
     }
   }
 
+  async setEreaderSettings(settings) {
+    try {
+      await Preferences.set({ key: 'ereaderSettings', value: JSON.stringify(settings) })
+    } catch (error) {
+      console.error('[LocalStorage] Failed to set ereader settings', error)
+    }
+  }
+
+  async getEreaderSettings() {
+    try {
+      const obj = (await Preferences.get({ key: 'ereaderSettings' })) || {}
+      return obj.value ? JSON.parse(obj.value) : null
+    } catch (error) {
+      console.error('[LocalStorage] Failed to get ereader settings', error)
+      return null
+    }
+  }
+
   /**
    * Get preference value by key
    * 

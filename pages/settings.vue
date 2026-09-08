@@ -68,6 +68,11 @@
       <p class="pl-4">{{ $strings.LabelAllowSeekingOnMediaControls }}</p>
     </div>
 
+    <!-- Ereader and read aloud (TTS) defaults for all books -->
+    <p class="uppercase text-xs font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderEreaderDefaults }}</p>
+    <p class="text-xs text-fg-muted mb-6">{{ $strings.MessageEreaderDefaultsHelp }}</p>
+    <readers-ereader-settings-form v-if="ereaderSettings" :settings="ereaderSettings" show-all-formats tts-available @change="ereaderSettingChanged" @open-tts-settings="showTTSSettingsDialog = true" />
+
     <!-- Sleep timer settings -->
     <template v-if="!isiOS">
       <p class="uppercase text-xs font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderSleepTimerSettings }}</p>
@@ -180,6 +185,7 @@
     </div>
 
     <modals-dialog v-model="showMoreMenuDialog" :items="moreMenuItems" :selected="moreMenuSelected" @action="clickMenuAction" />
+    <modals-tts-settings-dialog v-if="ereaderSettings" v-model="showTTSSettingsDialog" :language="ereaderSettings.ttsLanguage" :language-items="ttsLanguageItems" :rate="ereaderSettings.ttsRate" :tts-engine="ereaderSettings.ttsEngine" :tts-voices="ereaderSettings.ttsVoices" :controls-side="ereaderSettings.ttsControlsSide" :page-step="ereaderTtsPageStep" :is-native="isNativeTTS" @update:language="ereaderSettingChanged('ttsLanguage', $event)" @update:rate="ereaderSettingChanged('ttsRate', $event)" @update:engine="ereaderSettingChanged('ttsEngine', $event)" @update:voice="setEreaderTTSVoice" @update:controlsSide="ereaderSettingChanged('ttsControlsSide', $event)" @update:pageStep="ereaderSettingChanged('ttsPageStep', $event)" />
     <modals-sleep-timer-length-modal v-model="showSleepTimerLengthModal" @change="sleepTimerLengthModalSelection" />
     <modals-auto-sleep-timer-rewind-length-modal v-model="showAutoSleepTimerRewindLengthModal" @change="showAutoSleepTimerRewindLengthModalSelection" />
   </div>
@@ -188,6 +194,8 @@
 <script>
 import { Dialog } from '@capacitor/dialog'
 import jumpLabelMixin from '@/mixins/jumpLabel'
+import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
+import { ttsLanguageItems, withTtsVoice } from '@/utils/ereaderSettings'
 
 export default {
   mixins: [jumpLabelMixin],
@@ -199,6 +207,9 @@ export default {
       showSleepTimerLengthModal: false,
       showAutoSleepTimerRewindLengthModal: false,
       moreMenuSetting: '',
+      // Global ereader and read aloud defaults (store module `ereader`), null until loaded
+      ereaderSettings: null,
+      showTTSSettingsDialog: false,
       settings: {
         disableAutoRewind: false,
         enableAltView: true,
@@ -353,6 +364,16 @@ export default {
     },
     isiOS() {
       return this.$platform === 'ios'
+    },
+    isNativeTTS() {
+      return isNativeTTSPlayerAvailable()
+    },
+    ttsLanguageItems() {
+      return ttsLanguageItems()
+    },
+    ereaderTtsPageStep() {
+      const step = parseInt(this.ereaderSettings?.ttsPageStep)
+      return step > 0 ? step : 3
     },
     jumpForwardSecondsOptions() {
       return this.$store.state.globals.jumpForwardSecondsOptions || []
@@ -539,6 +560,25 @@ export default {
       document.documentElement.dataset.theme = theme
       this.$localStore.setTheme(theme)
     },
+    /** Edit of an ereader/read aloud default (settings form or the read aloud dialog) */
+    ereaderSettingChanged(key, value) {
+      if (!this.ereaderSettings || !(key in this.ereaderSettings) || this.ereaderSettings[key] === value) return
+      this.ereaderSettings = { ...this.ereaderSettings, [key]: value }
+      this.saveEreaderSettings()
+    },
+    setEreaderTTSVoice(voice) {
+      if (!this.ereaderSettings) return
+      this.ereaderSettings = withTtsVoice(this.ereaderSettings, voice)
+      this.saveEreaderSettings()
+    },
+    async saveEreaderSettings() {
+      try {
+        this.ereaderSettings = await this.$store.dispatch('ereader/save', this.ereaderSettings)
+      } catch (error) {
+        console.error('[Settings] Failed to save the ereader settings', error)
+        this.$toast.error(this.$strings.MessageEreaderSettingsSaveFailed)
+      }
+    },
     autoSleepTimerTimeUpdated(val) {
       if (!val) return // invalid times return falsy
       this.saveSettings()
@@ -678,6 +718,12 @@ export default {
       this.deviceData = await this.$db.getDeviceData()
       this.$store.commit('setDeviceData', this.deviceData)
       this.setDeviceSettings()
+      try {
+        this.ereaderSettings = { ...(await this.$store.dispatch('ereader/load')) }
+      } catch (error) {
+        console.error('[Settings] Failed to load the ereader settings', error)
+        this.ereaderSettings = { ...this.$store.getters['ereader/getSettings'] }
+      }
       this.loading = false
     }
   },
