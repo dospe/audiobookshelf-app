@@ -194,6 +194,21 @@ Instalace přes stávající aplikaci = aktualizace, data zůstávají.
   vypršel i SideStore samotný, refresh přes něj nejde: znovu ho nainstalovat
   iloaderem (Install SideStore, bez odinstalace), pak Refresh All.
 
+### 6.4 iPad
+
+Stejný IPA se instaluje i na iPad (projekt cílí na iPhone i iPad, všechny
+orientace, Split View / Stage Manager). Rozhraní je telefonní layout roztažený
+na šířku; čtečka EPUB zobrazí na širokém displeji dvě stránky vedle sebe
+(nastavení čtečky „spread“, výchozí auto). Postup se SideStore je totožný,
+iPadOS 15+.
+
+**Dvě zařízení s jedním free Apple ID:** free účet má jediný vývojářský
+certifikát. Instalace nebo obnova SideStore na druhém zařízení ho obnoví
+a zneplatní podpisy na prvním — aplikace tam nejdou spustit, dokud se znovu
+neobnoví, a obě zařízení si mohou certifikát střídavě brát (SideStore issue
+#978, AltStore #1597). Nejjednodušší je **samostatné free Apple ID pro každé
+zařízení**; každé má pak i vlastní limity z kapitoly 8.
+
 ## 8. Limity free Apple ID
 
 | Limit | Dopad |
