@@ -159,6 +159,7 @@ export default {
 
       const book = this.ttsBuildBookPayload(extracted)
       this.ttsNativeBook = book
+      console.log(`[ttsPlayer] Starting native read aloud in ${book.language} (voice: ${book.voice || 'default'}, engine: ${book.ttsEngine || 'default'})`)
       await this.ttsRegisterNativeListeners()
 
       try {

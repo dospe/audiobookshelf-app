@@ -630,6 +630,8 @@ export default {
 
       reader.book.ready.then(async () => {
         console.log('%c [EpubReader] Book ready', 'color:cyan;')
+        // The language of the book (dc:language) is a read aloud language default
+        this.$emit('loaded', { chapters: this.chapters, language: reader.book.packaging?.metadata?.language || null })
 
         // Load the cached cfi locations first - resuming from a saved
         // character ratio needs them

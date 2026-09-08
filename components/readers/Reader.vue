@@ -98,93 +98,18 @@
         </div>
         <div class="w-full overflow-y-auto overflow-x-hidden h-[calc(75vh-85px)] min-h-[320px] short:min-h-0 short:h-[calc(100vh-85px)]">
           <div class="w-full h-full px-4">
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelTheme }}</p>
+            <!-- Appearance and read aloud language are the settings of this book, the rest changes the defaults for all books -->
+            <readers-ereader-settings-form :settings="ereaderSettings" :is-epub="isEpub" :is-document="isDocument" :tts-available="ttsAvailable" :language-hint="ttsLanguageHint" @change="settingChanged" @open-tts-settings="showTTSSettingsDialog = true">
+              <div class="flex items-center mb-6">
+                <div class="w-32">
+                  <p class="text-sm">{{ $strings.LabelBookSettings }}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-fg-muted mb-2">{{ hasBookSettingsOverride ? $strings.MessageBookSettingsSaved : $strings.MessageBookSettingsDefault }}</p>
+                  <ui-btn small :disabled="!hasBookSettingsOverride" @click="setBookSettingsAsDefault">{{ $strings.ButtonUseForAllBooks }}</ui-btn>
+                </div>
               </div>
-              <ui-toggle-btns v-model="ereaderSettings.theme" name="theme" :items="themeItems" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelFontFamily }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.font" name="font" :items="fontItems" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelFontScale }}</p>
-              </div>
-              <ui-range-input v-model="ereaderSettings.fontScale" :min="5" :max="300" :step="5" input-width="180px" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelLineSpacing }}</p>
-              </div>
-              <ui-range-input v-model="ereaderSettings.lineSpacing" :min="100" :max="300" :step="5" input-width="180px" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelFontBoldness }}</p>
-              </div>
-              <ui-range-input v-model="ereaderSettings.textStroke" :min="0" :max="300" :step="5" input-width="180px" @input="settingsUpdated" />
-            </div>
-            <div v-if="isEpub" class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelLayout }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.spread" name="spread" :items="spreadItems" @input="settingsUpdated" />
-            </div>
-            <div v-if="isDocument" class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelTextEncoding }}</p>
-              </div>
-              <ui-dropdown v-model="ereaderSettings.legacyEncoding" :items="legacyEncodingItems" small class="flex-grow max-w-[200px]" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelNavigateWithVolume }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.navigateWithVolume" name="navigate-volume" :items="navigateWithVolumeItems" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelNavigateWithVolumeWhilePlaying }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.navigateWithVolumeWhilePlaying" name="navigate-volume-playing" :items="onOffToggleButtonItems" @input="settingsUpdated" />
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelKeepScreenAwake }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.keepScreenAwake" name="keep-awake" :items="onOffToggleButtonItems" @input="settingsUpdated" />
-            </div>
-            <div v-if="ttsAvailable" class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelReadAloudControlsSide }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.ttsControlsSide" name="tts-controls-side" :items="ttsControlsSideItems" @input="settingsUpdated" />
-            </div>
-            <div v-if="ttsAvailable" class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelReadAloudPageStep }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.ttsPageStep" name="tts-page-step" :items="ttsPageStepItems" @input="settingsUpdated" />
-            </div>
-            <div v-if="ttsAvailable" class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelReadAloudVoice }}</p>
-              </div>
-              <ui-btn small @click="showTTSSettingsDialog = true">{{ $strings.HeaderReadAloudSettings }}</ui-btn>
-            </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelBookSettings }}</p>
-              </div>
-              <div>
-                <p class="text-xs text-fg-muted mb-2">{{ hasBookSettingsOverride ? $strings.MessageBookSettingsSaved : $strings.MessageBookSettingsDefault }}</p>
-                <ui-btn small :disabled="!hasBookSettingsOverride" @click="setBookSettingsAsDefault">{{ $strings.ButtonUseForAllBooks }}</ui-btn>
-              </div>
-            </div>
+            </readers-ereader-settings-form>
           </div>
         </div>
       </div>
@@ -200,10 +125,15 @@ import { Capacitor } from '@capacitor/core'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
+import { DEFAULT_EREADER_SETTINGS, ttsLanguageItems, ttsLanguageForBookLanguage, withTtsVoice } from '@/utils/ereaderSettings'
 
 // Settings that are remembered per book (on the server) when they differ from
-// the global defaults. The rest (TTS voice, volume buttons, ...) is global only.
-const BOOK_SETTING_KEYS = ['theme', 'font', 'fontScale', 'lineSpacing', 'textStroke', 'spread', 'legacyEncoding']
+// the defaults of the book - the global defaults (store module `ereader`,
+// edited on the app settings page) with the read aloud language taken from
+// the book metadata when it is one of the offered languages. The rest (TTS
+// rate and voice, volume buttons, ...) is global only: changing it in the
+// reader changes the defaults.
+const BOOK_SETTING_KEYS = ['theme', 'font', 'fontScale', 'lineSpacing', 'textStroke', 'spread', 'legacyEncoding', 'ttsLanguage']
 
 export default {
   data() {
@@ -229,28 +159,15 @@ export default {
       progressRefreshToken: 0,
       // True when the server copy of the progress in the store was fetched for this opening
       serverProgressRefreshed: false,
+      // Global defaults as they were when the book was opened (see BOOK_SETTING_KEYS)
       globalEreaderSettings: null,
+      // Per-book settings saved for the open book as loaded (server or cache), and the current diff from the book defaults
+      bookSettingsLoaded: null,
       bookSettingsOverride: null,
       bookSettingsSaveTimeout: null,
-      ereaderSettings: {
-        theme: 'dark',
-        font: 'serif',
-        fontScale: 100,
-        lineSpacing: 115,
-        spread: 'auto',
-        textStroke: 0,
-        legacyEncoding: '',
-        navigateWithVolume: 'enabled',
-        navigateWithVolumeWhilePlaying: false,
-        keepScreenAwake: false,
-        ttsLanguage: 'en-US',
-        ttsRate: 1,
-        ttsEngine: '',
-        ttsVoices: {},
-        // Read aloud bar: playback controls side ('left' | 'right') and pages per rewind/forward step
-        ttsControlsSide: 'right',
-        ttsPageStep: 3
-      }
+      // Language declared by the ebook file itself, reported by the reader once it parsed the book
+      ebookLanguage: null,
+      ereaderSettings: { ...DEFAULT_EREADER_SETTINGS, ttsVoices: {} }
     }
   },
   watch: {
@@ -258,6 +175,7 @@ export default {
       handler(newVal) {
         if (newVal) {
           this.comicHasMetadata = false
+          this.ebookLanguage = null
           this.progressReady = false
           this.registerListeners()
           this.hideToolbar()
@@ -307,49 +225,31 @@ export default {
       if (this.isEpub || this.isDocument) return this.ereaderSettings.theme
       return document.documentElement.dataset.theme || 'dark'
     },
-    spreadItems() {
-      return [
-        {
-          text: this.$strings.LabelLayoutSinglePage,
-          value: 'none'
-        },
-        {
-          text: this.$strings.LabelLayoutAuto,
-          value: 'auto'
-        }
-      ]
-    },
-    navigateWithVolumeItems() {
-      return [
-        {
-          text: this.$strings.LabelOn,
-          value: 'enabled'
-        },
-        {
-          text: this.$strings.LabelNavigateWithVolumeMirrored,
-          value: 'mirrored'
-        },
-        {
-          text: this.$strings.LabelOff,
-          value: 'none'
-        }
-      ]
-    },
     ttsLanguageLabel() {
       const item = this.ttsLanguageItems.find((i) => i.value === this.ereaderSettings.ttsLanguage)
       return item?.text || (this.ereaderSettings.ttsLanguage || '').split('-')[0].toUpperCase()
     },
     ttsLanguageItems() {
-      return [
-        {
-          text: 'CZ',
-          value: 'cs-CZ'
-        },
-        {
-          text: 'EN',
-          value: 'en-US'
-        }
-      ]
+      return ttsLanguageItems()
+    },
+    /**
+     * Read aloud language of the open book from its metadata: the library item
+     * metadata (editable on the server) first, then the language the ebook
+     * file declares. Null when unknown or not one of the offered languages.
+     * @returns {string|null}
+     */
+    bookTtsLanguage() {
+      return ttsLanguageForBookLanguage(this.mediaMetadata.language) || ttsLanguageForBookLanguage(this.ebookLanguage)
+    },
+    /** Defaults of the open book the per-book settings are compared against */
+    bookDefaultSettings() {
+      const defaults = { ...(this.globalEreaderSettings || this.$store.getters['ereader/getSettings']) }
+      if (this.bookTtsLanguage) defaults.ttsLanguage = this.bookTtsLanguage
+      return defaults
+    },
+    ttsLanguageHint() {
+      if (!this.bookTtsLanguage || this.bookTtsLanguage !== this.ereaderSettings.ttsLanguage) return ''
+      return this.$strings.MessageReadAloudLanguageFromBook
     },
     ttsControlsOnRight() {
       return this.ereaderSettings.ttsControlsSide !== 'left'
@@ -358,76 +258,11 @@ export default {
       const step = parseInt(this.ereaderSettings.ttsPageStep)
       return step > 0 ? step : 3
     },
-    ttsControlsSideItems() {
-      return [
-        {
-          text: this.$strings.LabelLeft,
-          value: 'left'
-        },
-        {
-          text: this.$strings.LabelRight,
-          value: 'right'
-        }
-      ]
-    },
-    ttsPageStepItems() {
-      return [1, 2, 3, 5, 10].map((pages) => ({ text: String(pages), value: pages }))
-    },
     ttsBarBottom() {
       const playerOffset = this.isPlayerOpen ? 120 : 0
       // Epub and pdf readers show a bottom progress strip the bar sits above
       const progressStripOffset = this.isEpub || this.isPdf || this.isDocument ? 32 : 0
       return `${playerOffset + progressStripOffset}px`
-    },
-    onOffToggleButtonItems() {
-      return [
-        {
-          text: this.$strings.LabelOn,
-          value: true
-        },
-        {
-          text: this.$strings.LabelOff,
-          value: false
-        }
-      ]
-    },
-    themeItems() {
-      return [
-        {
-          text: this.$strings.LabelThemeBlack,
-          value: 'black'
-        },
-        {
-          text: this.$strings.LabelThemeDark,
-          value: 'dark'
-        },
-        {
-          text: this.$strings.LabelThemeLight,
-          value: 'light'
-        }
-      ]
-    },
-    fontItems() {
-      return [
-        {
-          text: this.$strings.LabelFontFamilySans,
-          value: 'sans-serif'
-        },
-        {
-          text: this.$strings.LabelFontFamilySerif,
-          value: 'serif'
-        }
-      ]
-    },
-    legacyEncodingItems() {
-      return [
-        { text: this.$strings.LabelTextEncodingAuto, value: '' },
-        { text: 'Windows-1250 (CE)', value: 'windows-1250' },
-        { text: 'Windows-1252 (West)', value: 'windows-1252' },
-        { text: 'Windows-1251 (Cyrillic)', value: 'windows-1251' },
-        { text: 'ISO-8859-2', value: 'iso-8859-2' },
-        { text: 'UTF-8', value: 'utf-8' }
-      ]
     },
     readerComponentName() {
       if (this.ebookType === 'epub') return 'readers-epub-reader'
@@ -545,6 +380,12 @@ export default {
       this.saveGlobalEreaderSettings()
       this.saveBookSettings()
     },
+    /** Edit from the settings form */
+    settingChanged(key, value) {
+      if (!(key in this.ereaderSettings) || this.ereaderSettings[key] === value) return
+      this.ereaderSettings[key] = value
+      this.settingsUpdated()
+    },
     applyEreaderSettings() {
       // Pass a copy so the reader component can detect which settings changed
       this.$refs.readerComponent?.updateSettings?.({ ...this.ereaderSettings })
@@ -564,16 +405,19 @@ export default {
         }
       }
       this.globalEreaderSettings = global
-      localStorage.setItem('ereaderSettings', JSON.stringify(global))
+      this.$store.dispatch('ereader/save', global).catch((error) => {
+        console.error('[Reader] Failed to save the ereader settings', error)
+      })
     },
-    /** Per-book settings that differ from the global defaults, or null */
+    /** Per-book settings that differ from the defaults of the book, or null */
     getBookSettingsDiff() {
       if (!this.globalEreaderSettings) return null
+      const defaults = this.bookDefaultSettings
       const diff = {}
       for (const key of BOOK_SETTING_KEYS) {
         const value = this.ereaderSettings[key]
         if (value === undefined || value === null) continue
-        if (value !== this.globalEreaderSettings[key]) diff[key] = value
+        if (value !== defaults[key]) diff[key] = value
       }
       return Object.keys(diff).length ? diff : null
     },
@@ -630,26 +474,36 @@ export default {
         return null
       }
     },
-    /** Make the current appearance settings the default for all books */
+    /** Make the current appearance settings and read aloud language the default for all books */
     setBookSettingsAsDefault() {
       const global = { ...(this.globalEreaderSettings || this.ereaderSettings) }
       for (const key of BOOK_SETTING_KEYS) global[key] = this.ereaderSettings[key]
       this.globalEreaderSettings = global
-      localStorage.setItem('ereaderSettings', JSON.stringify(global))
+      this.$store.dispatch('ereader/save', global).catch((error) => {
+        console.error('[Reader] Failed to save the ereader settings', error)
+      })
       this.saveBookSettings()
     },
     goToChapter(href) {
       this.showTOCModal = false
       this.$refs.readerComponent?.goToChapter(href)
     },
-    /** Mount the reader once the progress of the book is up to date */
+    /**
+     * Mount the reader once the progress of the book is up to date and the
+     * global ereader settings are loaded (loadEreaderSettings reads them
+     * synchronously when the reader mounts)
+     */
     async prepareReader() {
       const token = ++this.progressRefreshToken
+      const settingsLoad = this.$store.dispatch('ereader/load').catch((error) => {
+        console.error('[Reader] Failed to load the ereader settings', error)
+      })
       try {
         await this.refreshItemProgress(token)
       } catch (error) {
         console.error('[Reader] Failed to refresh the item progress', error)
       }
+      await settingsLoad
       if (token === this.progressRefreshToken && this.show) this.progressReady = true
     },
     /**
@@ -721,6 +575,22 @@ export default {
       if (this.isComic) {
         this.comicHasMetadata = data.hasMetadata
       }
+      if (data?.language) this.ebookLanguageLoaded(data.language)
+    },
+    /**
+     * The language the ebook file declares arrives once the reader parsed the
+     * book, after the settings were loaded. A book without a read aloud
+     * language of its own (library metadata or saved for the book) follows it.
+     */
+    ebookLanguageLoaded(language) {
+      this.ebookLanguage = language
+      if (!this.globalEreaderSettings || this.bookSettingsLoaded?.ttsLanguage) return
+      const bookLanguage = this.bookTtsLanguage
+      if (!bookLanguage || bookLanguage === this.ereaderSettings.ttsLanguage) return
+      console.log(`[Reader] Read aloud language ${bookLanguage} from the ebook language "${language}"`)
+      this.ereaderSettings.ttsLanguage = bookLanguage
+      this.bookSettingsOverride = this.getBookSettingsDiff()
+      this.applyEreaderSettings()
     },
     clickMetadataBtn() {
       this.$refs.readerComponent?.clickShowInfoMenu()
@@ -788,7 +658,7 @@ export default {
     },
     setTTSVoice(voice) {
       // Voices are stored per language so the CZ/EN toggle keeps its own pick
-      this.ereaderSettings.ttsVoices = { ...this.ereaderSettings.ttsVoices, [this.ereaderSettings.ttsLanguage]: voice }
+      this.ereaderSettings.ttsVoices = withTtsVoice(this.ereaderSettings, voice).ttsVoices
       this.settingsUpdated()
     },
     setTTSRate(delta) {
@@ -889,24 +759,21 @@ export default {
       this.show = false
     },
     loadEreaderSettings() {
-      try {
-        const settings = localStorage.getItem('ereaderSettings')
-        if (settings) {
-          const _ereaderSettings = JSON.parse(settings)
-          for (const key in this.ereaderSettings) {
-            if (_ereaderSettings[key] !== undefined) {
-              this.ereaderSettings[key] = _ereaderSettings[key]
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load ereader settings', error)
+      // The global defaults were loaded into the store before the reader mounted (prepareReader)
+      const global = this.$store.getters['ereader/getSettings']
+      for (const key in this.ereaderSettings) {
+        if (global[key] === undefined) continue
+        this.ereaderSettings[key] = key === 'ttsVoices' ? { ...global[key] } : global[key]
       }
       this.globalEreaderSettings = { ...this.ereaderSettings }
+
+      // Defaults of this book: the read aloud language of the book metadata
+      if (this.bookTtsLanguage) this.ereaderSettings.ttsLanguage = this.bookTtsLanguage
 
       // Apply the settings remembered for this book on top of the defaults
       clearTimeout(this.bookSettingsSaveTimeout)
       const override = this.loadBookSettingsOverride()
+      this.bookSettingsLoaded = override
       this.bookSettingsOverride = null
       if (override) {
         for (const key of BOOK_SETTING_KEYS) {
@@ -914,6 +781,7 @@ export default {
         }
         this.bookSettingsOverride = this.getBookSettingsDiff()
       }
+      console.log(`[Reader] Read aloud language ${this.ereaderSettings.ttsLanguage} (book ${this.bookTtsLanguage || '-'}, default ${global.ttsLanguage})`)
       this.applyEreaderSettings()
     },
     async initWatchVolume() {
