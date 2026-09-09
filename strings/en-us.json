@@ -315,7 +315,7 @@
   "MessageAudiobookshelfServerNotConnected": "Audiobookshelf server not connected",
   "MessageAudiobookshelfServerRequired": "<strong>Important!</strong> This app is designed to work with an Audiobookshelf server that you or someone you know is hosting. This app does not provide any content.",
   "MessageBookSettingsDefault": "Using the default settings",
-  "MessageBookSettingsSaved": "Settings are remembered for this book",
+  "MessageBookSettingsSaved": "Settings are remembered for this book (the appearance for this device)",
   "MessageBookshelfEmpty": "Bookshelf empty",
   "MessageConfirmAppExit": "Did you want to exit the app?",
   "MessageConfirmDeleteEpisodeDownloadQueue": "Are you sure you want to clear episode download queue?",

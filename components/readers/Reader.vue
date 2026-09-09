@@ -98,7 +98,7 @@
         </div>
         <div class="w-full overflow-y-auto overflow-x-hidden h-[calc(75vh-85px)] min-h-[320px] short:min-h-0 short:h-[calc(100vh-85px)]">
           <div class="w-full h-full px-4">
-            <!-- Appearance and read aloud language are the settings of this book, the rest changes the defaults for all books -->
+            <!-- Appearance (per device) and read aloud language are the settings of this book, the rest changes the defaults for all books -->
             <readers-ereader-settings-form :settings="ereaderSettings" :is-epub="isEpub" :is-document="isDocument" :tts-available="ttsAvailable" :language-hint="ttsLanguageHint" @change="settingChanged" @open-tts-settings="showTTSSettingsDialog = true">
               <div class="flex items-center mb-6">
                 <div class="w-32">
@@ -125,15 +125,16 @@ import { Capacitor } from '@capacitor/core'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
-import { DEFAULT_EREADER_SETTINGS, ttsLanguageItems, ttsLanguageForBookLanguage, withTtsVoice } from '@/utils/ereaderSettings'
+import { DEFAULT_EREADER_SETTINGS, BOOK_SETTING_KEYS, bookSettingsForDevice, withDeviceBookSettings, ttsLanguageItems, ttsLanguageForBookLanguage, withTtsVoice } from '@/utils/ereaderSettings'
 
-// Settings that are remembered per book (on the server) when they differ from
-// the defaults of the book - the global defaults (store module `ereader`,
+// BOOK_SETTING_KEYS are remembered per book (on the server) when they differ
+// from the defaults of the book - the global defaults (store module `ereader`,
 // edited on the app settings page) with the read aloud language taken from
-// the book metadata when it is one of the offered languages. The rest (TTS
-// rate and voice, volume buttons, ...) is global only: changing it in the
-// reader changes the defaults.
-const BOOK_SETTING_KEYS = ['theme', 'font', 'fontScale', 'lineSpacing', 'textStroke', 'spread', 'legacyEncoding', 'ttsLanguage']
+// the book metadata when it is one of the offered languages. The appearance
+// among them is kept per device, the read aloud language and the text
+// encoding are shared by all devices (see utils/ereaderSettings.js). The rest
+// (TTS rate and voice, volume buttons, ...) is global only: changing it in
+// the reader changes the defaults.
 
 export default {
   data() {
@@ -161,7 +162,9 @@ export default {
       serverProgressRefreshed: false,
       // Global defaults as they were when the book was opened (see BOOK_SETTING_KEYS)
       globalEreaderSettings: null,
-      // Per-book settings saved for the open book as loaded (server or cache), and the current diff from the book defaults
+      // Per-book settings of the open book as stored (server or cache): the shared keys and the appearance of every device
+      bookSettingsStored: null,
+      // The override of this device out of them as loaded, and the current diff from the book defaults
       bookSettingsLoaded: null,
       bookSettingsOverride: null,
       bookSettingsSaveTimeout: null,
@@ -363,6 +366,10 @@ export default {
     bookSettingsServerId() {
       return this.serverLibraryItemId
     },
+    /** Id of this device the per-book appearance is stored under (loaded with the global settings) */
+    deviceId() {
+      return this.$store.getters['ereader/getDeviceId']
+    },
     bookSettingsCacheKey() {
       const id = this.bookSettingsServerId || this.selectedLibraryItem?.id
       return id ? `ereaderBookSettings:${id}` : null
@@ -426,31 +433,35 @@ export default {
       const changed = JSON.stringify(diff) !== JSON.stringify(this.bookSettingsOverride)
       this.bookSettingsOverride = diff
       if (!changed) return
-      this.cacheBookSettings(diff)
+      // The whole stored object is written back so the entries of the other devices survive
+      const stored = withDeviceBookSettings(this.bookSettingsStored, diff, this.deviceId)
+      this.bookSettingsStored = stored
+      this.cacheBookSettings(stored)
 
       clearTimeout(this.bookSettingsSaveTimeout)
-      this.bookSettingsSaveTimeout = setTimeout(() => this.sendBookSettings(diff), 1000)
+      this.bookSettingsSaveTimeout = setTimeout(() => this.sendBookSettings(stored), 1000)
     },
-    cacheBookSettings(diff) {
+    cacheBookSettings(stored) {
       if (!this.bookSettingsCacheKey) return
       try {
-        if (diff) localStorage.setItem(this.bookSettingsCacheKey, JSON.stringify(diff))
+        if (stored) localStorage.setItem(this.bookSettingsCacheKey, JSON.stringify(stored))
         else localStorage.removeItem(this.bookSettingsCacheKey)
       } catch (error) {
         console.error('Failed to cache book settings', error)
       }
     },
-    sendBookSettings(diff) {
+    sendBookSettings(stored) {
       if (!this.bookSettingsServerId) return
-      this.$nativeHttp.patch(`/api/me/progress/${this.bookSettingsServerId}`, { ebookSettings: diff }).catch((error) => {
+      this.$nativeHttp.patch(`/api/me/progress/${this.bookSettingsServerId}`, { ebookSettings: stored }).catch((error) => {
         console.error('Failed to save book settings', error)
       })
     },
     /**
-     * Per-book settings saved for the current book: from the server progress
-     * when available, otherwise from the local cache (offline / local items).
+     * Per-book settings stored for the current book (all devices): from the
+     * server progress when available, otherwise from the local cache
+     * (offline / local items).
      */
-    loadBookSettingsOverride() {
+    loadStoredBookSettings() {
       const serverProgress = this.bookSettingsServerId ? this.$store.getters['user/getUserMediaProgress'](this.bookSettingsServerId) : null
       const serverSettings = serverProgress?.ebookSettings && typeof serverProgress.ebookSettings === 'object' ? serverProgress.ebookSettings : null
       if (serverSettings) {
@@ -770,9 +781,10 @@ export default {
       // Defaults of this book: the read aloud language of the book metadata
       if (this.bookTtsLanguage) this.ereaderSettings.ttsLanguage = this.bookTtsLanguage
 
-      // Apply the settings remembered for this book on top of the defaults
+      // Apply the settings remembered for this book on this device on top of the defaults
       clearTimeout(this.bookSettingsSaveTimeout)
-      const override = this.loadBookSettingsOverride()
+      this.bookSettingsStored = this.loadStoredBookSettings()
+      const override = bookSettingsForDevice(this.bookSettingsStored, this.deviceId)
       this.bookSettingsLoaded = override
       this.bookSettingsOverride = null
       if (override) {
