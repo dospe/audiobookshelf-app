@@ -1,319 +1,337 @@
-# iOS build pro vlastní iPhone (free Apple ID, SideStore, iloader)
+# iOS build for your own iPhone (free Apple ID, SideStore, iloader)
 
-Aplikace se pro iOS staví v GitHub Actions (`.github/workflows/build-ios.yml`)
-jako **nepodepsaný IPA**. Podpis dělá až na telefonu **SideStore** vaším
-(bezplatným) Apple ID a každý týden ho sám obnovuje. Není potřeba placený Apple
-Developer Program ani Mac pro každou instalaci — MacBook je potřeba jen jednou,
-k instalaci SideStore.
+The iOS app is built in GitHub Actions (`.github/workflows/build-ios.yml`)
+as an **unsigned IPA**. Signing happens on the phone: **SideStore** signs the
+app with your (free) Apple ID and renews the signature every week by itself.
+No paid Apple Developer Program and no Mac for every install — a MacBook is
+needed only once, to install SideStore.
 
-Postup odpovídá oficiální dokumentaci SideStore (docs.sidestore.io, stav 2026):
-instalace přes **iloader**, VPN **LocalDevVPN**. Starší návody s AltServerem,
-jitterbugpair, WireGuard nebo StosVPN jsou pro SideStore zastaralé.
+The steps follow the official SideStore documentation (docs.sidestore.io, as
+of 2026): installation through **iloader**, VPN **LocalDevVPN**. Older guides
+built around AltServer, jitterbugpair, WireGuard or StosVPN are outdated for
+SideStore.
 
-Obsah:
+Contents:
 
-1. [Jak to celé funguje](#1-jak-to-celé-funguje)
-2. [Co potřebuješ](#2-co-potřebuješ)
-3. [Co nainstalovat na MacBook](#3-co-nainstalovat-na-macbook)
-4. [Příprava iPhonu](#4-příprava-iphonu)
-5. [Instalace SideStore přes iloader](#5-instalace-sidestore-přes-iloader)
-6. [Instalace a aktualizace Audiobookshelf](#6-instalace-a-aktualizace-audiobookshelf)
-7. [Obnova podpisu (7 dní)](#7-obnova-podpisu-7-dní)
-8. [Limity free Apple ID](#8-limity-free-apple-id)
-9. [Řešení potíží](#9-řešení-potíží)
-10. [Alternativa: AltStore + AltServer na Macu](#10-alternativa-altstore--altserver-na-macu)
-11. [Alternativa: build a instalace z Xcode](#11-alternativa-build-a-instalace-z-xcode)
-12. [Co dělá CI a „IPA server“ (source feed)](#12-co-dělá-ci-a-ipa-server-source-feed)
+1. [How it all works](#1-how-it-all-works)
+2. [What you need](#2-what-you-need)
+3. [What to install on the MacBook](#3-what-to-install-on-the-macbook)
+4. [Preparing the iPhone](#4-preparing-the-iphone)
+5. [Installing SideStore with iloader](#5-installing-sidestore-with-iloader)
+6. [Installing and updating Audiobookshelf](#6-installing-and-updating-audiobookshelf)
+7. [Signature renewal (7 days)](#7-signature-renewal-7-days)
+8. [Limits of a free Apple ID](#8-limits-of-a-free-apple-id)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Alternative: AltStore + AltServer on the Mac](#10-alternative-altstore--altserver-on-the-mac)
+11. [Alternative: build and install from Xcode](#11-alternative-build-and-install-from-xcode)
+12. [What CI and the "IPA server" (source feed) do](#12-what-ci-and-the-ipa-server-source-feed-do)
 
-## 1. Jak to celé funguje
+## 1. How it all works
 
-- **CI** (macOS runner na GitHubu, na veřejném repu zdarma) sestaví z každého
-  pushe nepodepsaný `audiobookshelf-ios.ipa`. Push do `master` ho navíc připne
-  k pre-release **`latest-ios`** spolu se souborem `sidestore-source.json`
-  („source feed“ — seznam aplikací a verzí, kterému SideStore rozumí).
-- **SideStore** na iPhonu IPA podepíše vývojářským certifikátem vašeho Apple ID
-  a nainstaluje. Certifikát free účtu platí **7 dní**; SideStore ho na pozadí
-  obnovuje (potřebuje k tomu zapnutou LocalDevVPN a Wi‑Fi).
-- Po přidání source feedu do SideStore vidíte každý nový build z `master`
-  jako **Update** a nainstalujete ho jedním klepnutím.
-- **iloader** na MacBooku se použije jen jednou: nainstaluje SideStore a uloží
-  do telefonu tzv. pairing file (párovací soubor, díky kterému SideStore
-  „mluví“ se systémem jako by byl připojený počítač).
+- **CI** (a macOS runner on GitHub, free for a public repository) builds an
+  unsigned `audiobookshelf-ios.ipa` from every push. A push to `master` also
+  attaches it to the **`latest-ios`** pre-release together with
+  `sidestore-source.json` (the "source feed" — a list of apps and versions
+  that SideStore understands).
+- **SideStore** on the iPhone signs the IPA with the developer certificate of
+  your Apple ID and installs it. The certificate of a free account is valid
+  for **7 days**; SideStore renews it in the background (it needs LocalDevVPN
+  switched on and Wi‑Fi to do so).
+- Once the source feed is added to SideStore, every new build from `master`
+  shows up as an **Update** and installs with one tap.
+- **iloader** on the MacBook is used only once: it installs SideStore and
+  stores a so-called pairing file on the phone (the file that lets SideStore
+  "talk" to the system as if a computer were connected).
 
-Co v iOS buildu je a není:
+What the iOS build does and does not include:
 
-- Je: čtečka e-knih s **nativním předčítáním** (běží i se zhasnutou obrazovkou,
-  ovládání ze zamykací obrazovky, Control Center, sluchátek a obrazovky
-  „Právě hraje“ v CarPlay), synchronizace pozice čtení s lokální DB i serverem,
-  výběr hlasu (hlasy se stahují v Nastavení → Zpřístupnění → Předčítaný obsah
-  → Hlasy). Výběr enginu na iOS není, systém má jen jeden.
-- Není a nebude: browse a spouštění knih z CarPlay (Android Auto strom se
-  nepřenáší). CarPlay audio aplikace potřebuje entitlement od Apple pro placený
-  účet a sideloadovaný build ho nést nemůže.
+- Included: the ebook reader with **native read aloud** (keeps running with
+  the screen off, controls on the lock screen, in Control Center, from
+  headphones and on the CarPlay "Now Playing" screen), reading position sync
+  with the local database and the server, voice selection (voices are
+  downloaded in Settings → Accessibility → Spoken Content → Voices). There is
+  no engine selection on iOS; the system has only one.
+- Not included and not planned: browsing and starting books from CarPlay (the
+  Android Auto tree does not carry over). A CarPlay audio app needs an
+  entitlement that Apple grants to paid accounts, and a sideloaded build
+  cannot carry it.
 
-## 2. Co potřebuješ
+## 2. What you need
 
-| Co | Poznámka |
+| What | Note |
 | --- | --- |
-| iPhone s iOS/iPadOS **15.0+** a zapnutým kódem zámku | podle SideStore prerequisites; Developer Mode na iOS 16+ |
-| MacBook (macOS High Sierra+) | jen na první instalaci SideStore; ostatní jde bez počítače |
-| USB kabel Mac ↔ iPhone | pro iloader při instalaci a při obnově pairing file |
-| Apple ID | free účet stačí; SideStore doporučuje **samostatné Apple ID** jen pro sideload (účet se používá jako vývojářský, s hlavním účtem není důvod riskovat) |
-| Wi‑Fi | instalace i obnova podpisu vyžadují Wi‑Fi, mobilní data nestačí |
-| ~30 minut | první instalace včetně případného řešení potíží |
+| iPhone with iOS/iPadOS **15.0+** and a passcode set | per the SideStore prerequisites; Developer Mode on iOS 16+ |
+| MacBook (macOS High Sierra+) | only for the first SideStore install; everything else works without a computer |
+| USB cable Mac ↔ iPhone | for iloader during the install and when renewing the pairing file |
+| Apple ID | a free account is enough; SideStore recommends a **separate Apple ID** just for sideloading (the account is used as a developer account, there is no reason to risk your main one) |
+| Wi‑Fi | installing and renewing signatures require Wi‑Fi, mobile data is not enough |
+| ~30 minutes | for the first install including possible troubleshooting |
 
-## 3. Co nainstalovat na MacBook
+## 3. What to install on the MacBook
 
-### 3.1 iloader (nutné)
+### 3.1 iloader (required)
 
-**iloader** je oficiální instalátor SideStore (projekt idevice / nab138).
-Stahujte **jen** z oficiálních míst: <https://iloader.app> nebo
-<https://github.com/nab138/iloader/releases> (soubor pro macOS). Jiné weby
-nabízející „iloader“ nepoužívat.
+**iloader** is the official SideStore installer (idevice project / nab138).
+Download it **only** from the official places: <https://iloader.app> or
+<https://github.com/nab138/iloader/releases> (the macOS file). Do not use
+other sites offering an "iloader".
 
-1. Stáhnout macOS balíček z releases, otevřít a přetáhnout `iloader` do
-   Applications.
-2. Při prvním spuštění může macOS hlásit neověřeného vývojáře — povolit
-   v Nastavení systému → Soukromí a zabezpečení („Přesto otevřít“).
-3. Nic dalšího není potřeba: na macOS není nutný iTunes (zařízení vidí Finder),
-   ani žádný nástroj na pairing file — ten obstará iloader.
+1. Download the macOS package from the releases, open it and drag `iloader`
+   into Applications.
+2. On first launch macOS may complain about an unverified developer — allow
+   it in System Settings → Privacy & Security ("Open Anyway").
+3. Nothing else is needed: on macOS there is no need for iTunes (Finder sees
+   the device) or for any pairing file tool — iloader takes care of that.
 
-### 3.2 Volitelně: AltServer
+### 3.2 Optional: AltServer
 
-Jen pokud byste místo SideStore chtěli klasický **AltStore** (kapitola 10).
-Pro SideStore AltServer **není** potřeba. Ke stažení na <https://altstore.io>;
-vyžaduje macOS 11+ (pro macOS 10.14/10.15 verze 1.6.2). Od verze 1.7 už
-nepotřebuje Mail plug‑in.
+Only if you want the classic **AltStore** instead of SideStore (chapter 10).
+SideStore does **not** need AltServer. Download from <https://altstore.io>;
+requires macOS 11+ (version 1.6.2 for macOS 10.14/10.15). Since version 1.7
+it no longer needs the Mail plug‑in.
 
-### 3.3 Volitelně: nástroje pro lokální build
+### 3.3 Optional: tools for a local build
 
-Jen pokud chcete IPA stavět sami místo CI (kapitola 11): Xcode z App Store,
-Node.js 20 a CocoaPods — postup je v `readme.md` v sekci „Mac Environment
-Setup for iOS“ (`brew install node cocoapods`).
+Only if you want to build the IPA yourself instead of using CI (chapter 11):
+Xcode from the App Store, Node.js 20 and CocoaPods — the steps are in
+`readme.md` under "Mac Environment Setup for iOS" (`brew install node
+cocoapods`).
 
-## 4. Příprava iPhonu
+## 4. Preparing the iPhone
 
-1. **LocalDevVPN** nainstalovat z App Store (vydavatel Coxson Engineering LLC;
-   <https://apps.apple.com/app/id6755608044>). Je to bezplatná aplikace
-   s oprávněním na lokální VPN tunel, přes který SideStore instaluje
-   a obnovuje aplikace bez počítače.
-2. Otevřít LocalDevVPN, klepnout na připojení, povolit přidání VPN konfigurace
-   (iOS se zeptá na kód zámku) a **nechat VPN zapnutou** po celou dobu
-   instalace, aktualizací a obnovy podpisů.
-3. **Režim vývojáře** (iOS 16+): Nastavení → Soukromí a zabezpečení → Režim
-   vývojáře → zapnout → telefon se restartuje → potvrdit. Položka se objeví až
-   po prvním připojení k iloaderu / instalaci první vývojářské aplikace; pokud
-   ji nevidíte, vraťte se k ní po kroku 5.
-4. Nastavení → Obecné → Obnovení aplikací na pozadí: povolit (globálně
-   a později pro SideStore), jinak se podpisy neobnoví samy.
+1. Install **LocalDevVPN** from the App Store (publisher Coxson Engineering
+   LLC; <https://apps.apple.com/app/id6755608044>). It is a free app with a
+   local VPN tunnel entitlement, through which SideStore installs and renews
+   apps without a computer.
+2. Open LocalDevVPN, tap connect, allow adding the VPN configuration (iOS asks
+   for the passcode) and **leave the VPN on** for the whole time you install,
+   update or renew signatures.
+3. **Developer Mode** (iOS 16+): Settings → Privacy & Security → Developer
+   Mode → turn on → the phone restarts → confirm. The item only appears after
+   the first connection to iloader / the first developer app install; if you
+   do not see it, come back to it after step 5.
+4. Settings → General → Background App Refresh: allow it (globally and later
+   for SideStore), otherwise signatures will not renew on their own.
 
-## 5. Instalace SideStore přes iloader
+## 5. Installing SideStore with iloader
 
-Na MacBooku:
+On the MacBook:
 
-1. Připojit iPhone kabelem, odemknout ho a na telefonu potvrdit **Důvěřovat
-   tomuto počítači** (zadat kód).
-2. Spustit **iloader**. Přihlásit se Apple ID (heslo se posílá jen Apple;
-   přihlašovací údaje jsou **case‑sensitive**). Při dvoufázovém ověření
-   opsat kód z telefonu.
-3. Vybrat zařízení a zvolit **Install SideStore (Stable)**. iloader nahraje
-   SideStore, zaregistruje App ID a umístí pairing file.
-   (Podporu k iloaderu poskytuje Discord projektu idevice, ne SideStore.)
+1. Connect the iPhone with the cable, unlock it and confirm **Trust This
+   Computer** on the phone (enter the passcode).
+2. Launch **iloader**. Sign in with the Apple ID (the password goes only to
+   Apple; the credentials are **case-sensitive**). With two-factor
+   authentication, type in the code from the phone.
+3. Select the device and choose **Install SideStore (Stable)**. iloader
+   uploads SideStore, registers the App ID and places the pairing file.
+   (Support for iloader is provided by the idevice project's Discord, not
+   SideStore's.)
 
-Na iPhonu:
+On the iPhone:
 
-4. Nastavení → Obecné → **VPN a správa zařízení** → pod „Developer App“
-   klepnout na své Apple ID → **Důvěřovat**. Na iOS 18+ nabídne „Povolit
-   a restartovat“ — potvrdit kódem, telefon se restartuje.
-5. Pokud se objevil **Režim vývojáře** (krok 4.3), zapnout ho.
-6. Zapnout **LocalDevVPN**.
-7. Otevřít **SideStore**, přihlásit se stejným Apple ID jako v iloaderu.
-8. Karta **My Apps** → klepnout na počítadlo **„7 DAYS“** u SideStore →
-   proběhne první refresh. Když se zeptá na správu certifikátů, potvrdit
-   „Yes“ / „Refresh Now“.
+4. Settings → General → **VPN & Device Management** → under "Developer App"
+   tap your Apple ID → **Trust**. On iOS 18+ it offers "Allow & Restart" —
+   confirm with the passcode, the phone restarts.
+5. If **Developer Mode** has appeared (step 4.3), turn it on.
+6. Turn on **LocalDevVPN**.
+7. Open **SideStore** and sign in with the same Apple ID as in iloader.
+8. **My Apps** tab → tap the **"7 DAYS"** counter next to SideStore → the
+   first refresh runs. When it asks about certificate management, confirm
+   "Yes" / "Refresh Now".
 
-Tím je SideStore hotový a Mac už není potřeba (kromě obnovy pairing file po
-aktualizaci iOS nebo resetu — kapitola 9).
+SideStore is now ready and the Mac is no longer needed (except for renewing
+the pairing file after an iOS update or a reset — chapter 9).
 
-## 6. Instalace a aktualizace Audiobookshelf
+## 6. Installing and updating Audiobookshelf
 
-Vždy: zapnutá **LocalDevVPN** a **Wi‑Fi**.
+Always: **LocalDevVPN** on and **Wi‑Fi**.
 
-### 6.1 Přes source feed (doporučeno — aktualizace jedním klepnutím)
+### 6.1 Through the source feed (recommended — one-tap updates)
 
-Feed je soubor `sidestore-source.json` v releasu `latest-ios`:
+The feed is the `sidestore-source.json` file in the `latest-ios` release:
 
 ```
 https://github.com/dospe/audiobookshelf-app/releases/download/latest-ios/sidestore-source.json
 ```
 
-Přidání do SideStore:
+Adding it to SideStore:
 
-- **Jedním odkazem:** v Safari na iPhonu do adresního řádku vložit
+- **With one link:** in Safari on the iPhone paste
   `sidestore://source?url=https://github.com/dospe/audiobookshelf-app/releases/download/latest-ios/sidestore-source.json`
-  a potvrdit otevření v SideStore. (Odkaz je i v popisu releasu; GitHub ho
-  zobrazuje jako text, proto kopírovat.)
-- **Ručně:** SideStore → karta **Browse** → **Sources** (vlevo nahoře) → **+**
-  → vložit URL feedu → Add.
+  into the address bar and confirm opening in SideStore. (The link is also in
+  the release notes; GitHub shows it as plain text, so copy it.)
+- **Manually:** SideStore → **Browse** tab → **Sources** (top left) → **+**
+  → paste the feed URL → Add.
 
-Pak: Browse → source „Audiobookshelf (dospe)“ → **Audiobookshelf** →
-**Install** (přihlásit Apple ID, chvíli počkat). Aplikace se objeví na ploše.
+Then: Browse → source "Audiobookshelf (dospe)" → **Audiobookshelf** →
+**Install** (sign in with the Apple ID, wait a moment). The app appears on the
+home screen.
 
-**Aktualizace:** po každém pushi do `master` CI přepíše release novým buildem
-s vyšším číslem verze (`0.13.<číslo běhu>`). SideStore při dalším otevření
-(nebo kontrole na pozadí) ukáže **Update** u aplikace (My Apps / Browse) —
-klepnout na Update. Data aplikace (přihlášení, stažené knihy, průběh) zůstávají.
+**Updates:** after every push to `master` CI replaces the release with a new
+build carrying a higher version number (`<major>.<minor>.<run number>`,
+currently `0.14.<run number>`). The next time SideStore is opened (or checks
+in the background) it shows **Update** next to the app (My Apps / Browse) —
+tap Update. App data (login, downloaded books, progress) is kept.
 
-### 6.2 Přímý odkaz na IPA
+### 6.2 Direct link to the IPA
 
-V Safari vložit
+In Safari paste
 `sidestore://install?url=https://github.com/dospe/audiobookshelf-app/releases/download/latest-ios/audiobookshelf-ios.ipa`
-— SideStore IPA stáhne a nainstaluje. Aktualizace stejně, s tím rozdílem, že
-SideStore o nové verzi sám neví.
+— SideStore downloads and installs the IPA. Updates work the same way, except
+that SideStore does not know about new versions by itself.
 
-### 6.3 Ručně ze souboru
+### 6.3 Manually from a file
 
-1. V Safari otevřít releases → `latest-ios` → stáhnout `audiobookshelf-ios.ipa`
-   (skončí v Soubory → Stažené). Pro build konkrétní větve stáhnout artefakt
-   `audiobookshelf-ipa` z běhu workflow (je to zip, uvnitř IPA + feed).
-2. SideStore → **My Apps** → **+** (vlevo nahoře) → vybrat IPA v Souborech.
-   Nebo v Souborech IPA podržet → Sdílet → **SideStore**.
+1. In Safari open the releases → `latest-ios` → download
+   `audiobookshelf-ios.ipa` (it ends up in Files → Downloads). For a build of a
+   specific branch download the `audiobookshelf-ipa` artifact from the
+   workflow run (it is a zip with the IPA and the feed inside).
+2. SideStore → **My Apps** → **+** (top left) → pick the IPA in Files. Or
+   long-press the IPA in Files → Share → **SideStore**.
 
-Instalace přes stávající aplikaci = aktualizace, data zůstávají.
-
-## 7. Obnova podpisu (7 dní)
-
-- Podpis (a tím spustitelnost) vyprší **7 dní** od podepsání. SideStore ho
-  obnovuje **na pozadí** — podmínky: LocalDevVPN zapnutá, Wi‑Fi, povolené
-  Obnovení aplikací na pozadí, a SideStore občas otevřený (iOS pozadí
-  neplánuje spolehlivě, pokud aplikaci dlouho nepustíte).
-- **Ručně:** SideStore → My Apps → **Refresh All** (nebo klepnout na počet dní
-  u konkrétní aplikace). Doporučuji jednou týdně při otevření SideStore.
-- Když podpis **vyprší**: aplikace nejde spustit („Nelze ověřit aplikaci“ /
-  ikona ztmavne). Data se **neztrácí** — stačí Refresh v SideStore. Když
-  vypršel i SideStore samotný, refresh přes něj nejde: znovu ho nainstalovat
-  iloaderem (Install SideStore, bez odinstalace), pak Refresh All.
+Installing over the existing app = an update, the data is kept.
 
 ### 6.4 iPad
 
-Stejný IPA se instaluje i na iPad (projekt cílí na iPhone i iPad, všechny
-orientace, Split View / Stage Manager). Rozhraní je telefonní layout roztažený
-na šířku; čtečka EPUB zobrazí na širokém displeji dvě stránky vedle sebe
-(nastavení čtečky „spread“, výchozí auto). Postup se SideStore je totožný,
-iPadOS 15+.
+The same IPA installs on an iPad as well (the project targets both iPhone and
+iPad, all orientations, Split View / Stage Manager). The interface is the
+phone layout stretched to the width; the EPUB reader shows two pages side by
+side on a wide display (the reader "spread" setting, default auto). The
+SideStore steps are identical, iPadOS 15+.
 
-**Dvě zařízení s jedním free Apple ID:** free účet má jediný vývojářský
-certifikát. Instalace nebo obnova SideStore na druhém zařízení ho obnoví
-a zneplatní podpisy na prvním — aplikace tam nejdou spustit, dokud se znovu
-neobnoví, a obě zařízení si mohou certifikát střídavě brát (SideStore issue
-#978, AltStore #1597). Nejjednodušší je **samostatné free Apple ID pro každé
-zařízení**; každé má pak i vlastní limity z kapitoly 8.
+**Two devices with one free Apple ID:** a free account has a single developer
+certificate. Installing or refreshing SideStore on the second device renews
+it and invalidates the signatures on the first — the apps there will not
+launch until they are refreshed again, and the two devices can keep taking
+the certificate from each other (SideStore issue #978, AltStore #1597). The
+simplest approach is a **separate free Apple ID for each device**; each then
+also has its own limits from chapter 8.
 
-## 8. Limity free Apple ID
+## 7. Signature renewal (7 days)
 
-| Limit | Dopad |
+- The signature (and with it the ability to launch) expires **7 days** after
+  signing. SideStore renews it **in the background** — conditions: LocalDevVPN
+  on, Wi‑Fi, Background App Refresh allowed, and SideStore opened now and then
+  (iOS does not schedule background work reliably for an app you have not
+  launched in a long time).
+- **Manually:** SideStore → My Apps → **Refresh All** (or tap the day counter
+  next to a specific app). I recommend doing this once a week when opening
+  SideStore.
+- When the signature **expires**: the app will not launch ("Unable to Verify
+  App" / the icon dims). The data is **not lost** — a Refresh in SideStore is
+  enough. When SideStore itself has expired too, refreshing through it is not
+  possible: install it again with iloader (Install SideStore, without
+  uninstalling), then Refresh All.
+
+## 8. Limits of a free Apple ID
+
+| Limit | Impact |
 | --- | --- |
-| **3 sideloadované aplikace** současně, **včetně SideStore** | Audiobookshelf + ještě jedna další; LocalDevVPN je z App Store a nepočítá se |
-| **10 App ID za 7 dní** | každá (pře)instalovaná aplikace zabere App ID na týden; při „Maximum number of App IDs“ počkat, přehled v My Apps → View App IDs |
-| **7 dní** platnost podpisu | kapitola 7 |
-| Žádné restricted entitlements | CarPlay, push notifikace přes APNs apod. nejdou; background audio (`UIBackgroundModes`) je běžný režim a funguje |
-| Pairing file | nutno obnovit po **aktualizaci iOS nebo resetu**, výjimečně vyprší i sám (kapitola 9) |
+| **3 sideloaded apps** at a time, **including SideStore** | Audiobookshelf plus one more; LocalDevVPN comes from the App Store and does not count |
+| **10 App IDs per 7 days** | every (re)installed app takes an App ID for a week; on "Maximum number of App IDs" wait, overview in My Apps → View App IDs |
+| **7 days** of signature validity | chapter 7 |
+| No restricted entitlements | CarPlay, push notifications through APNs and the like are not possible; background audio (`UIBackgroundModes`) is a regular mode and works |
+| Pairing file | must be renewed after an **iOS update or a reset**, occasionally it expires on its own (chapter 9) |
 
-## 9. Řešení potíží
+## 9. Troubleshooting
 
-- **iloader nevidí iPhone:** odemknout telefon, potvrdit „Důvěřovat“, zkusit
-  jiný kabel/port; ve Finderu musí být zařízení vidět.
-- **Přihlášení Apple ID selhává v SideStore:** zkontrolovat velikost písmen;
-  změnit **Anisette URL** v SideStore → Settings (starší veřejné anisette
-  servery způsobovaly zablokování Apple ID, ponechat oficiální). Dvoufázový kód
-  se zadává při přihlášení.
-- **Refresh / instalace selhává, „minimuxer“ nebo chyby spojení:** zapnout
-  LocalDevVPN (ne WireGuard/StosVPN ze starých návodů), být na Wi‑Fi, vypnout
-  DNS blokátory, restartovat SideStore a telefon. Pokud trvá: obnovit pairing
-  file (níže).
-- **Obnova pairing file** (po update iOS, resetu, nebo když SideStore hlásí
-  neplatný pairing): připojit iPhone k Macu, spustit iloader → **Delete Stored
-  Pairing** → vybrat zařízení → na telefonu Důvěřovat → **Manage Pairing
-  File** → u SideStore (a případně dalších aplikací) **Place** → hláška
-  „Pairing file placed successfully!“.
-- **Instalace „visí“:** aktualizovat SideStore, Settings → clear cache, změnit
-  Anisette server, reset `adi.pb`, restart, nový pairing file, případně
-  přeinstalace SideStore přes iloader.
-- **Aplikace nejde spustit („Nedůvěryhodný vývojář“):** Nastavení → Obecné →
-  VPN a správa zařízení → důvěřovat; na iOS 16+ zapnout Režim vývojáře.
-- **Update ve feedu nevidím:** SideStore kontroluje sources při otevření karty
-  Browse (potáhnout pro obnovení); ověřit, že release `latest-ios` má nový
-  build (číslo verze v názvu releasu).
-- **Chybové kódy:** docs.sidestore.io → Troubleshooting → Error codes.
-  Podpora: Discord SideStore (SideStore) a idevice (iloader).
+- **iloader does not see the iPhone:** unlock the phone, confirm "Trust", try
+  another cable/port; the device must be visible in Finder.
+- **Apple ID sign-in fails in SideStore:** check the letter case; change the
+  **Anisette URL** in SideStore → Settings (older public anisette servers
+  caused Apple ID lockouts, keep the official one). The two-factor code is
+  entered at sign-in.
+- **Refresh / install fails, "minimuxer" or connection errors:** turn on
+  LocalDevVPN (not WireGuard/StosVPN from the old guides), be on Wi‑Fi, turn
+  off DNS blockers, restart SideStore and the phone. If it persists: renew
+  the pairing file (below).
+- **Renewing the pairing file** (after an iOS update, a reset, or when
+  SideStore reports an invalid pairing): connect the iPhone to the Mac, launch
+  iloader → **Delete Stored Pairing** → select the device → Trust on the phone
+  → **Manage Pairing File** → next to SideStore (and any other apps) **Place**
+  → the message "Pairing file placed successfully!".
+- **Install "hangs":** update SideStore, Settings → clear cache, change the
+  Anisette server, reset `adi.pb`, restart, a new pairing file, or reinstall
+  SideStore through iloader.
+- **The app will not launch ("Untrusted Developer"):** Settings → General →
+  VPN & Device Management → trust; on iOS 16+ turn on Developer Mode.
+- **I do not see the update in the feed:** SideStore checks the sources when
+  the Browse tab is opened (pull to refresh); check that the `latest-ios`
+  release carries a new build (the version number in the release title).
+- **Error codes:** docs.sidestore.io → Troubleshooting → Error codes. Support:
+  the SideStore Discord (SideStore) and the idevice Discord (iloader).
 
-## 10. Alternativa: AltStore + AltServer na Macu
+## 10. Alternative: AltStore + AltServer on the Mac
 
-Klasický AltStore obnovuje podpisy přes **AltServer běžící na Macu ve stejné
-Wi‑Fi** — Mac tedy musí být zapnutý a v dosahu, jinak se po 7 dnech aplikace
-zablokují. Pro MacBook, který se zavírá a nosí pryč, je SideStore vhodnější.
+The classic AltStore renews signatures through **AltServer running on a Mac on
+the same Wi‑Fi** — so the Mac has to be on and within reach, otherwise the
+apps lock after 7 days. For a MacBook that gets closed and carried away,
+SideStore is the better fit.
 
-Pokud přesto AltStore:
+If you still want AltStore:
 
-1. Stáhnout AltServer z <https://altstore.io>, přetáhnout `AltServer.app` do
-   Applications a spustit — objeví se v liště nahoře. Vyžaduje macOS 11+.
-2. Ve Finderu vybrat iPhone → zapnout **„Zobrazit tento iPhone v síti Wi‑Fi“**
-   (Wi‑Fi synchronizace), aby AltServer fungoval bez kabelu.
-3. Připojit iPhone kabelem, odemknout, důvěřovat počítači. Ikona AltServer →
-   **Install AltStore** → vybrat zařízení → zadat Apple ID. (AltServer 1.7+
-   Mail plug‑in nepotřebuje; pokud starší verze o Mail plug‑in žádá,
-   postupovat podle jejího dialogu.)
-4. Na iPhonu důvěřovat vývojářské aplikaci (Nastavení → Obecné → VPN a správa
-   zařízení) a zapnout Režim vývojáře (iOS 16+).
-5. IPA nainstalovat buď v AltStore (My Apps → +), nebo z Macu: podržet
-   **⌥ Option** a kliknout na ikonu AltServer → **Sideload .ipa…** → vybrat
+1. Download AltServer from <https://altstore.io>, drag `AltServer.app` into
+   Applications and launch it — it appears in the menu bar. Requires macOS 11+.
+2. In Finder select the iPhone → enable **"Show this iPhone when on Wi‑Fi"**
+   (Wi‑Fi syncing), so that AltServer works without the cable.
+3. Connect the iPhone with the cable, unlock it, trust the computer. AltServer
+   icon → **Install AltStore** → select the device → enter the Apple ID.
+   (AltServer 1.7+ does not need the Mail plug‑in; if an older version asks
+   for it, follow its dialog.)
+4. On the iPhone trust the developer app (Settings → General → VPN & Device
+   Management) and turn on Developer Mode (iOS 16+).
+5. Install the IPA either in AltStore (My Apps → +) or from the Mac: hold
+   **⌥ Option** and click the AltServer icon → **Sideload .ipa…** → pick
    `audiobookshelf-ios.ipa`.
-6. Source feed z kapitoly 6.1 funguje i v AltStore (Sources → +); odkaz
-   `altstore://source?url=…` je obdoba `sidestore://`.
-7. Nechat AltServer spouštět po přihlášení, aby obnova na pozadí běžela.
+6. The source feed from chapter 6.1 works in AltStore too (Sources → +); the
+   link `altstore://source?url=…` is the counterpart of `sidestore://`.
+7. Let AltServer start at login so the background renewal keeps running.
 
-## 11. Alternativa: build a instalace z Xcode
+## 11. Alternative: build and install from Xcode
 
-Bez CI, přímo z MacBooku (nutné Xcode, Node 20, CocoaPods):
+Without CI, straight from the MacBook (Xcode, Node 20 and CocoaPods required):
 
 ```bash
 npm ci && npm run generate && npx cap sync ios
 open ios/App/App.xcworkspace
 ```
 
-V Xcode: cíl `Audiobookshelf` → Signing & Capabilities → Team = váš osobní tým
-(free Apple ID přidané v Xcode → Settings → Accounts); Bundle Identifier
-případně změnit, pokud Apple hlásí kolizi. Připojit iPhone (Režim vývojáře),
-zvolit ho jako cíl a **Run**. Podpis platí 7 dní a obnoví se jen dalším
-spuštěním z Xcode — pro běžné používání je SideStore pohodlnější.
+In Xcode: target `Audiobookshelf` → Signing & Capabilities → Team = your
+personal team (the free Apple ID added in Xcode → Settings → Accounts); change
+the Bundle Identifier if Apple reports a collision. Connect the iPhone
+(Developer Mode), select it as the destination and **Run**. The signature is
+valid for 7 days and only renews with another run from Xcode — for everyday
+use SideStore is more convenient.
 
-## 12. Co dělá CI a „IPA server“ (source feed)
+## 12. What CI and the "IPA server" (source feed) do
 
-Workflow `.github/workflows/build-ios.yml` (`macos-15`, ~5 minut):
+The workflow `.github/workflows/build-ios.yml` (`macos-15`, ~5 minutes):
 
-1. `npm ci && npm run generate && npx cap sync ios` (včetně `pod install`).
-2. `xcodebuild archive` bez podpisu (`CODE_SIGNING_ALLOWED=NO`), konfigurace
-   Release, bundle id `com.audiobookshelf.app`. Číslo verze je
-   `<major>.<minor>.<číslo běhu>` z `MARKETING_VERSION` v Xcode projektu
-   a build number = číslo běhu, takže každý build má jinou verzi (SideStore
-   podle ní pozná aktualizaci; vidět je v Nastavení aplikace → O aplikaci).
-3. Zabalí `Payload/Audiobookshelf.app` do `audiobookshelf-ios.ipa` a skriptem
-   `scripts/make-sidestore-source.py` vygeneruje `sidestore-source.json`
-   (formát AltSource: `name`, `bundleIdentifier`, `versions[]` s `version`,
-   `buildVersion`, `date`, `downloadURL`, `size`, `sha256`; bez
-   `marketplaceID`, které by SideStore odmítl).
-4. Oba soubory nahraje jako artefakt `audiobookshelf-ipa`; na `master` navíc
-   smaže a znovu vytvoří pre-release **`latest-ios`** s oběma soubory
-   a odkazy `sidestore://` v popisu. Tím má IPA i feed **stálou URL**, kterou
-   SideStore sleduje.
+1. `npm ci && npm run generate && npx cap sync ios` (including `pod install`).
+2. `xcodebuild archive` without signing (`CODE_SIGNING_ALLOWED=NO`), Release
+   configuration, bundle id `com.audiobookshelf.app`. The version number is
+   `<major>.<minor>.<run number>` from the `MARKETING_VERSION` in the Xcode
+   project and the build number is the run number, so every build has a
+   different version (SideStore uses it to detect an update; it is visible in
+   the app's Settings → About).
+3. Packs `Payload/Audiobookshelf.app` into `audiobookshelf-ios.ipa` and
+   generates `sidestore-source.json` with the script
+   `scripts/make-sidestore-source.py` (AltSource format: `name`,
+   `bundleIdentifier`, `versions[]` with `version`, `buildVersion`, `date`,
+   `downloadURL`, `size`, `sha256`; without `marketplaceID`, which SideStore
+   would reject).
+4. Uploads both files as the `audiobookshelf-ipa` artifact; on `master` it
+   also deletes and recreates the **`latest-ios`** pre-release with both files
+   and `sidestore://` links in the notes. That gives the IPA and the feed a
+   **stable URL** that SideStore watches.
 
-„IPA server“ tedy není nic, co by běželo u vás — je to GitHub Releases. Kdyby
-bylo někdy potřeba hostovat feed jinde (vlastní web, GitHub Pages), stačí
-zkopírovat `sidestore-source.json` a upravit `downloadURL`; formát zůstává.
-Feed lze mít i s více verzemi (přidávat položky do `versions`), CI teď drží
-jen poslední build.
+So the "IPA server" is nothing running on your side — it is GitHub Releases.
+Should the feed ever need to be hosted elsewhere (your own site, GitHub
+Pages), copying `sidestore-source.json` and adjusting `downloadURL` is
+enough; the format stays the same. The feed can also carry several versions
+(add entries to `versions`); CI currently keeps only the latest build.
 
-Užitečné odkazy: SideStore docs <https://docs.sidestore.io>, iloader
+Useful links: SideStore docs <https://docs.sidestore.io>, iloader
 <https://iloader.app>, LocalDevVPN <https://apps.apple.com/app/id6755608044>,
-AltStore FAQ <https://faq.altstore.io>, formát source
+AltStore FAQ <https://faq.altstore.io>, source format
 <https://faq.altstore.io/developers/make-a-source>.

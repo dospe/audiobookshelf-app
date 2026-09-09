@@ -1,47 +1,50 @@
-# Návrh: Nativní TTS přehrávač e-knih (s podporou Android Auto)
+# Design: Native TTS ebook player (with Android Auto support)
 
-Stav: návrh k diskusi · Navazuje na: WebView předčítání ve čtečce (`mixins/ttsPlayer.js`)
+Status: design for discussion · Builds on: WebView read aloud in the reader (`mixins/ttsPlayer.js`)
 
-## 1. Motivace
+## 1. Motivation
 
-Současné předčítání (v1) běží ve WebView: JavaScript čtečky extrahuje text a po
-větách volá nativní plugin `@capacitor-community/text-to-speech`. Mluvení samotné
-je nativní, ale **řídicí smyčka je v JS**, což znamená:
+The current read aloud (v1) runs in the WebView: the reader's JavaScript
+extracts the text and calls the native `@capacitor-community/text-to-speech`
+plugin sentence by sentence. The speaking itself is native, but **the control
+loop lives in JS**, which means:
 
-- **Zhasnutá obrazovka / pozadí:** iOS suspenduje WKWebView po zamknutí — čtení
-  skončí po aktuální větě. Android WebView zpravidla běží dál, ale bez foreground
-  služby ho může systém kdykoli uspat (Doze, optimalizace baterie).
-- **Žádná media session:** předčítání nemá notifikaci s ovládáním, nereaguje na
-  bluetooth tlačítka a neexistuje pro Android Auto ani CarPlay.
-- **Žádný výběr knihy v autě:** Android Auto browse tree (`BrowseTree.kt`) zná
-  jen audio položky.
+- **Screen off / background:** iOS suspends the WKWebView once the phone is
+  locked — reading stops after the current sentence. The Android WebView
+  usually keeps running, but without a foreground service the system can
+  suspend it at any time (Doze, battery optimisation).
+- **No media session:** read aloud has no notification with controls, does
+  not react to Bluetooth buttons and does not exist for Android Auto or
+  CarPlay.
+- **No book selection in the car:** the Android Auto browse tree
+  (`BrowseTree.kt`) only knows audio items.
 
-Cíl v2: přesunout řídicí smyčku TTS do nativní vrstvy jako plnohodnotný
-"přehrávač", který žije ve stejné infrastruktuře jako přehrávač audioknih.
+Goal of v2: move the TTS control loop into the native layer as a full
+"player" living in the same infrastructure as the audiobook player.
 
-## 2. Co už v aplikaci existuje (na čem stavíme)
+## 2. What the app already has (what we build on)
 
-| Součást | Soubor | Role |
+| Component | File | Role |
 | --- | --- | --- |
-| `PlayerNotificationService` | `android/.../player/PlayerNotificationService.kt` | `MediaBrowserServiceCompat`: ExoPlayer/Cast, MediaSession, notifikace, audio focus, Android Auto root |
-| `BrowseTree` + `MediaManager` | `android/.../player/BrowseTree.kt`, `android/.../media/MediaManager.kt` | obsah pro Android Auto (knihovny, pokračovat v poslechu…) |
-| `MediaProgressSyncer` | `android/.../media/MediaProgressSyncer.kt` | ukládání/sync průběhu na server |
-| `AbsAudioPlayer` | `android/.../plugins/AbsAudioPlayer.kt`, `ios/App/Shared/plugins/AbsAudioPlayer.swift` | Capacitor most WebView ↔ nativní přehrávač |
-| `AudioPlayer` (iOS) | `ios/App/Shared/player/AudioPlayer.swift` | AVPlayer, `MPNowPlayingInfoCenter`, remote commands, background audio (`UIBackgroundModes: audio` už je v Info.plist) |
-| TTS mixin (v1) | `mixins/ttsPlayer.js` | extrakce textu z EPUB/MOBI/PDF, chunkování po větách |
+| `PlayerNotificationService` | `android/.../player/PlayerNotificationService.kt` | `MediaBrowserServiceCompat`: ExoPlayer/Cast, MediaSession, notification, audio focus, Android Auto root |
+| `BrowseTree` + `MediaManager` | `android/.../player/BrowseTree.kt`, `android/.../media/MediaManager.kt` | content for Android Auto (libraries, continue listening, …) |
+| `MediaProgressSyncer` | `android/.../media/MediaProgressSyncer.kt` | saving/syncing progress to the server |
+| `AbsAudioPlayer` | `android/.../plugins/AbsAudioPlayer.kt`, `ios/App/Shared/plugins/AbsAudioPlayer.swift` | Capacitor bridge WebView ↔ native player |
+| `AudioPlayer` (iOS) | `ios/App/Shared/player/AudioPlayer.swift` | AVPlayer, `MPNowPlayingInfoCenter`, remote commands, background audio (`UIBackgroundModes: audio` is already in Info.plist) |
+| TTS mixin (v1) | `mixins/ttsPlayer.js` | text extraction from EPUB/MOBI/PDF, chunking by sentences |
 
-Klíčové pozorování: **extrakci textu už umíme v JS** (epub.js, mobi parser,
-pdf.js) a nedává smysl ji přepisovat nativně pro tři formáty. Nativní vrstva
-proto dostane už hotový strukturovaný text.
+Key observation: **text extraction already works in JS** (epub.js, mobi
+parser, pdf.js) and rewriting it natively for three formats makes no sense.
+The native layer therefore receives already structured text.
 
-## 3. Cílová architektura
+## 3. Target architecture
 
 ```
 ┌────────────────────────── WebView (Nuxt) ──────────────────────────┐
-│ čtečka (EpubReader/MobiReader/PdfReader)                           │
-│   └─ extrakce textu (existující mixin hooky)                       │
+│ reader (EpubReader/MobiReader/PdfReader)                           │
+│   └─ text extraction (existing mixin hooks)                        │
 │        └─ TTSBook payload ────────────┐                            │
-│ UI čtečky poslouchá eventy (onParagraph, onStateChange)            │
+│ reader UI listens to events (onParagraph, onStateChange)           │
 └───────────────────────────────────────┼────────────────────────────┘
                                         ▼
                           Capacitor plugin AbsTTSPlayer
@@ -49,70 +52,70 @@ proto dostane už hotový strukturovaný text.
         ┌───────────────────────────────┴───────────────────────────┐
         ▼                                                           ▼
   Android: TTS playback engine                          iOS: TTS playback engine
-  v PlayerNotificationService                           v AudioPlayer vrstvě
+  in PlayerNotificationService                          in the AudioPlayer layer
   - android.speech.tts.TextToSpeech                     - AVSpeechSynthesizer
   - MediaSession (play/pause/seek/rate)                 - MPNowPlayingInfoCenter
-  - foreground notifikace                               - MPRemoteCommandCenter
-  - audio focus (sdílený s ExoPlayerem)                 - AVAudioSession (playback)
-  - Android Auto: BrowseTree kategorie                  - výhledově CarPlay
-  - cache TTSBook na disku (JSON)                       - cache TTSBook na disku
-  - MediaProgressSyncer (průběh na server)              - sync průběhu (existující cesta)
+  - foreground notification                             - MPRemoteCommandCenter
+  - audio focus (shared with ExoPlayer)                 - AVAudioSession (playback)
+  - Android Auto: BrowseTree category                   - CarPlay later
+  - TTSBook cache on disk (JSON)                        - TTSBook cache on disk
+  - MediaProgressSyncer (progress to server)            - progress sync (existing path)
 ```
 
-### 3.1 Datový model `TTSBook`
+### 3.1 Data model `TTSBook`
 
-Jednotný payload předávaný z JS do nativní vrstvy a cacheovaný na disku
-(JSON v app storage, např. `tts-cache/<libraryItemId>.json`):
+A single payload passed from JS to the native layer and cached on disk (JSON
+in app storage, e.g. `tts-cache/<libraryItemId>.json`):
 
 ```ts
 interface TTSBook {
-  libraryItemId: string        // server nebo local id
+  libraryItemId: string        // server or local id
   serverAddress?: string
   title: string
   author: string
-  coverPath?: string           // lokální cesta/URL na obálku
-  language: string             // výchozí jazyk předčítání ('cs-CZ' | 'en-US' | …)
+  coverPath?: string           // local path/URL of the cover
+  language: string             // default read aloud language ('cs-CZ' | 'en-US' | …)
   ebookFormat: 'epub' | 'mobi' | 'pdf'
   chapters: TTSChapter[]
-  totalChars: number           // pro odhad "délky" a procenta
-  pageStep?: number            // stran na jeden skok next/prev (nastavení čtečky, výchozí 3)
-  pageChars?: number           // odhad znaků na zobrazenou stranu ze čtečky (0 = neznámý)
+  totalChars: number           // for the estimated "length" and percentage
+  pageStep?: number            // pages per next/prev skip (reader setting, default 3)
+  pageChars?: number           // estimated characters per displayed page from the reader (0 = unknown)
 }
 
 interface TTSChapter {
   title: string
-  startLocation: string        // epub spine href / pdf stránka / mobi anchor
-  startCfi?: string            // začátek kapitoly jako epub cfi – fallback pozice pro čtečku
+  startLocation: string        // epub spine href / pdf page / mobi anchor
+  startCfi?: string            // chapter start as an epub cfi – fallback position for the reader
   paragraphs: TTSParagraph[]
 }
 
 interface TTSParagraph {
   text: string
-  location?: string            // cfi / číslo stránky – pro progress a follow-along
+  location?: string            // cfi / page number – for progress and follow-along
   chars: number
 }
 ```
 
-- Chunkování po větách (dnes `splitTextChunks`) se přesune do nativní vrstvy —
-  Kotlin/Swift verze stejného algoritmu; JS posílá celé odstavce.
-- "Čas" v media session se odhaduje z počtu znaků a rychlosti (heuristika
-  ~15 znaků/s při 1.0×). Nemusí být přesný — slouží pro progress bar
-  v notifikaci/autě a pro relativní seek.
+- Chunking by sentences (today `splitTextChunks`) moves to the native layer —
+  a Kotlin/Swift version of the same algorithm; JS sends whole paragraphs.
+- The "time" in the media session is estimated from the character count and
+  the rate (heuristic ~15 characters/s at 1.0×). It does not have to be exact
+  — it serves the progress bar in the notification/car and relative seeking.
 
 ### 3.2 Capacitor plugin `AbsTTSPlayer`
 
 ```ts
 interface AbsTTSPlayerPlugin {
-  // příprava: uloží TTSBook do cache a připraví session (bez spuštění)
+  // preparation: stores the TTSBook in the cache and prepares the session (without starting)
   prepareBook(book: TTSBook): Promise<void>
-  // spustí/obnoví předčítání od pozice
+  // starts/resumes read aloud from a position
   play(options?: { libraryItemId?: string, chapterIndex?: number, paragraphIndex?: number }): Promise<void>
   pause(): Promise<void>
-  stop(): Promise<void>       // ukončí session, zruší notifikaci
+  stop(): Promise<void>       // ends the session, dismisses the notification
   seekTo(options: { chapterIndex: number, paragraphIndex: number }): Promise<void>
   nextChapter(): Promise<void>
   prevChapter(): Promise<void>
-  // posun o pageStep stran (delta -1 zpět / 1 vpřed), viz A.3
+  // skip by pageStep pages (delta -1 back / 1 forward), see A.3
   seekPages(options: { delta: number }): Promise<void>
   setPageStep(options: { pageStep: number, pageChars: number }): Promise<void>
   setRate(options: { rate: number }): Promise<void>
@@ -121,148 +124,156 @@ interface AbsTTSPlayerPlugin {
   removeCachedBook(options: { libraryItemId: string }): Promise<void>
   listCachedBooks(): Promise<{ books: TTSBookSummary[] }>
 
-  // eventy do WebView
+  // events to the WebView
   addListener(event: 'onParagraph', cb: (p: { chapterIndex: number, paragraphIndex: number, location?: string }) => void)
   addListener(event: 'onStateChange', cb: (s: TTSPlayerState) => void)
 }
 ```
 
-Chování WebView čtečky:
+Behaviour of the WebView reader:
 
-- Otevřená čtečka poslouchá `onParagraph` → follow-along (otočení stránky /
-  scroll) přes existující `ttsFollowParagraph` hooky. Ovládací lišta z v1
-  zůstává, jen volá plugin místo lokální smyčky.
-- Zavřená aplikace/čtečka: nativní služba jede dál sama; progress se
-  synchronizuje nativně.
+- An open reader listens to `onParagraph` → follow-along (page turn / scroll)
+  through the existing `ttsFollowParagraph` hooks. The control bar from v1
+  stays, it just calls the plugin instead of the local loop.
+- App/reader closed: the native service keeps running on its own; progress is
+  synced natively.
 
 ### 3.3 Android
 
-**Kde:** rozšíření `PlayerNotificationService` (žádná druhá služba — jedna
-media session na aplikaci je i požadavek Android Auto).
+**Where:** an extension of `PlayerNotificationService` (no second service —
+one media session per app is also an Android Auto requirement).
 
-- **`TTSPlaybackEngine`** (nová třída v `player/`): drží `TextToSpeech`
-  instanci, frontu chunků aktuálního odstavce, pozici (kapitola/odstavec)
-  a rychlost. Mluví přes `TextToSpeech#speak` s `UtteranceProgressListener`
-  pro posun na další chunk. Implementuje stejný "session guard" jako JS v1.
-- **Přepínání zdrojů:** služba dostane interní režim `AUDIO | TTS`. Při startu
-  TTS session se zastaví ExoPlayer (a naopak) — jedna media session, jeden
-  audio focus (`AudioFocusRequest`, `AUDIOFOCUS_GAIN`), ducking beze změny.
-- **MediaSession mapping:** play/pause → engine; seek forward/back → ±odstavec;
-  next/prev → ±N stran (krok z nastavení čtečky, `pageStep` × `pageChars`
-  v `TTSBook`); `setPlaybackSpeed` → TTS rate; metadata z `TTSBook`
-  (titul, autor, obálka, kapitola jako "track").
-- **Notifikace:** existující `PlayerNotificationListener` cesta; jen jiný
-  MediaDescription adaptér pro TTS režim.
-- **Android Auto:** v `BrowseTree` nová kategorie **„E-knihy"** naplněná
-  z `listCachedBooks()` (tj. knihy, které uživatel aspoň jednou otevřel
-  ve čtečce / explicitně "připravil pro poslech"). Výběr v autě →
-  `prepareBook` z cache → `play`. Vyžaduje, aby cache obsahovala i metadata
-  a obálku — proto se cache plní při `prepareBook`, ne až při `play`.
-- **Doze/battery:** foreground služba s typem `mediaPlayback` (už existuje) —
-  tím zmizí problém uspávání z v1.
+- **`TTSPlaybackEngine`** (new class in `player/`): holds the `TextToSpeech`
+  instance, the chunk queue of the current paragraph, the position
+  (chapter/paragraph) and the rate. Speaks through `TextToSpeech#speak` with
+  an `UtteranceProgressListener` to move to the next chunk. Implements the
+  same "session guard" as JS v1.
+- **Source switching:** the service gets an internal mode `AUDIO | TTS`.
+  Starting a TTS session stops ExoPlayer (and vice versa) — one media session,
+  one audio focus (`AudioFocusRequest`, `AUDIOFOCUS_GAIN`), ducking unchanged.
+- **MediaSession mapping:** play/pause → engine; seek forward/back →
+  ±paragraph; next/prev → ±N pages (the step from the reader settings,
+  `pageStep` × `pageChars` in `TTSBook`); `setPlaybackSpeed` → TTS rate;
+  metadata from `TTSBook` (title, author, cover, chapter as the "track").
+- **Notification:** the existing `PlayerNotificationListener` path; only a
+  different MediaDescription adapter for the TTS mode.
+- **Android Auto:** a new **"Ebooks"** category in `BrowseTree`, filled from
+  `listCachedBooks()` (i.e. books the user has opened in the reader at least
+  once / explicitly "prepared for listening"). Selection in the car →
+  `prepareBook` from the cache → `play`. Requires the cache to hold metadata
+  and the cover as well — that is why the cache is filled on `prepareBook`,
+  not only on `play`.
+- **Doze/battery:** a foreground service of type `mediaPlayback` (already
+  exists) — this removes the suspension problem of v1.
 
 ### 3.4 iOS
 
-- **`TTSPlayer`** (nová třída vedle `AudioPlayer.swift`): `AVSpeechSynthesizer`
+- **`TTSPlayer`** (new class next to `AudioPlayer.swift`): `AVSpeechSynthesizer`
   + `AVSpeechSynthesisVoice(language:)`, audio session `.playback` /
-  `.spokenAudio` (stejně jako audioknihy). Background audio mód už je zapnutý —
-  syntéza poběží i se zamknutou obrazovkou, pokud session zůstane aktivní.
-- **Lock screen / ovládání:** `MPNowPlayingInfoCenter` (titul, autor, obálka,
-  odhad času) + `MPRemoteCommandCenter` (play/pause, skip ±odstavec, rate).
-- **CarPlay (samostatná fáze):** vyžaduje CarPlay audio entitlement od Apple
-  (schvalovací proces!) a `CPTemplateApplicationSceneDelegate` +
-  `CPListTemplate` pro browse. Aplikace dnes CarPlay nemá vůbec — dává smysl
-  udělat CarPlay nejdřív pro audioknihy a e-knihy přidat jako kategorii.
+  `.spokenAudio` (same as audiobooks). The background audio mode is already
+  on — synthesis keeps running with the screen locked as long as the session
+  stays active.
+- **Lock screen / controls:** `MPNowPlayingInfoCenter` (title, author, cover,
+  time estimate) + `MPRemoteCommandCenter` (play/pause, skip ±paragraph, rate).
+- **CarPlay (separate phase):** requires the CarPlay audio entitlement from
+  Apple (an approval process!) and `CPTemplateApplicationSceneDelegate` +
+  `CPListTemplate` for browsing. The app has no CarPlay today at all — it
+  makes sense to do CarPlay for audiobooks first and add ebooks as a category.
 
-### 3.5 Synchronizace průběhu
+### 3.5 Progress sync
 
-- Nativní engine po každém odstavci zná `location` (cfi/stránka) a kumulativní
-  `chars` → `ebookLocation` + `ebookProgress` (poměr znaků) na existující
-  endpoint `PATCH /api/me/progress/:id` (Android přes `MediaProgressSyncer`,
-  iOS přes existující API vrstvu). Stejný formát, jaký dnes ukládá čtečka —
-  po otevření čtečky se pokračuje tam, kde skončilo předčítání, a naopak.
+- After every paragraph the native engine knows the `location` (cfi/page) and
+  the cumulative `chars` → `ebookLocation` + `ebookProgress` (character ratio)
+  to the existing endpoint `PATCH /api/me/progress/:id` (Android through
+  `MediaProgressSyncer`, iOS through the existing API layer). The same format
+  the reader saves today — opening the reader continues where read aloud
+  stopped, and vice versa.
 
-## 4. Fáze implementace
+## 4. Implementation phases
 
-| Fáze | Obsah | Odhad |
+| Phase | Content | Estimate |
 | --- | --- | --- |
-| **F1** | Plugin `AbsTTSPlayer` + Android `TTSPlaybackEngine` v `PlayerNotificationService`, notifikace, media session, cache, progress sync. Čtečka přepnuta z v1 smyčky na plugin (mixin hooky zůstávají pro extrakci a follow-along). | největší kus práce |
-| **F2** | Android Auto: kategorie „E-knihy" v `BrowseTree`, výběr a ovládání z auta. | malá až střední (staví na F1) |
-| **F3** | iOS `TTSPlayer` + Now Playing + remote commands (background/zamčená obrazovka na iOS). **Implementováno** (viz A.10), sideload build přes `build-ios.yml` a `docs/ios-sideload.md`; ověření na zařízení zatím neproběhlo. | střední |
-| **F4** | CarPlay: entitlement, scéna, šablony (ideálně vč. audioknih). **Odloženo na neurčito** — CarPlay audio entitlement uděluje Apple jen placenému účtu po žádosti a sideloadovaný build (free Apple ID) ho nést nemůže. Bez něj funguje jen obrazovka „Právě hraje“ v CarPlay (ovládání, ne browse). | střední + externí závislost na Apple |
+| **F1** | Plugin `AbsTTSPlayer` + Android `TTSPlaybackEngine` in `PlayerNotificationService`, notification, media session, cache, progress sync. Reader switched from the v1 loop to the plugin (the mixin hooks stay for extraction and follow-along). | the biggest piece of work |
+| **F2** | Android Auto: "Ebooks" category in `BrowseTree`, selection and control from the car. | small to medium (builds on F1) |
+| **F3** | iOS `TTSPlayer` + Now Playing + remote commands (background/locked screen on iOS). **Implemented** (see A.10), sideload build through `build-ios.yml` and `docs/ios-sideload.md`; not yet verified on a device. | medium |
+| **F4** | CarPlay: entitlement, scene, templates (ideally including audiobooks). **Postponed indefinitely** — Apple grants the CarPlay audio entitlement only to a paid account on request, and a sideloaded build (free Apple ID) cannot carry it. Without it only the CarPlay "Now Playing" screen works (controls, no browsing). | medium + external dependency on Apple |
 
-Fallback: WebView smyčka z v1 zůstane v kódu jako záloha pro případ, že
-nativní vrstva není dostupná (např. starý build), a pro okamžité čtení bez
-`prepareBook`.
+Fallback: the WebView loop from v1 stays in the code as a backup for when the
+native layer is not available (e.g. an old build) and for immediate reading
+without `prepareBook`.
 
-## 5. Rizika a otevřené otázky
+## 5. Risks and open questions
 
-- **Latence a dostupnost hlasů:** `TextToSpeech` init je asynchronní a engine
-  nemusí mít český hlas (řeší se `isLanguageSupported` + toast, případně
-  odkaz na instalaci hlasů — plugin má `openInstall()`).
-- **Sémantika času:** media session vyžaduje duration/position — odhad ze
-  znaků je nepřesný; UI v autě může ukazovat "přibližný" čas. Alternativa:
-  ukazovat pozici jako "kapitola X, odstavec Y/Z".
-- **Souběh s audioknihou:** je třeba jasně definovat, že start TTS zastaví
-  audio přehrávání (a naopak) — jedna session, žádné dva zdroje zvuku.
-- **Velikost cache:** plný text knihy je stovky KB až jednotky MB JSON —
-  limit počtu cacheovaných knih + LRU mazání (obdoba epub locations cache).
-- **PDF bez textové vrstvy** dál nepůjdou (OCR je mimo rozsah).
-- **CarPlay entitlement** může trvat týdny a Apple ho nemusí udělit pro
-  TTS obsah — proto je CarPlay poslední fáze a žádná dřívější na něm nezávisí.
-- **Upstream:** pokud má jít o příspěvek do upstream `advplyr/audiobookshelf-app`,
-  je vhodné návrh probrat s maintainerem předem (touch points:
-  `PlayerNotificationService`, `BrowseTree` — místa s aktivním vývojem).
+- **Latency and voice availability:** `TextToSpeech` init is asynchronous and
+  the engine may not have a Czech voice (handled with `isLanguageSupported` +
+  a toast, possibly a link to install voices — the plugin has `openInstall()`).
+- **Time semantics:** the media session requires duration/position — the
+  estimate from characters is inexact; the car UI may show an "approximate"
+  time. Alternative: show the position as "chapter X, paragraph Y/Z".
+- **Coexistence with an audiobook:** it must be clearly defined that starting
+  TTS stops audio playback (and vice versa) — one session, never two audio
+  sources.
+- **Cache size:** the full text of a book is hundreds of KB to a few MB of
+  JSON — a limit on the number of cached books + LRU eviction (like the epub
+  locations cache).
+- **PDFs without a text layer** still will not work (OCR is out of scope).
+- **The CarPlay entitlement** can take weeks and Apple may not grant it for
+  TTS content — that is why CarPlay is the last phase and no earlier phase
+  depends on it.
+- **Upstream:** if this is meant as a contribution to upstream
+  `advplyr/audiobookshelf-app`, the design should be discussed with the
+  maintainer beforehand (touch points: `PlayerNotificationService`,
+  `BrowseTree` — areas under active development).
 
 ---
 
-## Příloha A: Implementační specifikace fáze F1 (+ F2)
+## Appendix A: Implementation specification of phase F1 (+ F2)
 
-Cíl F1: předčítání běží v nativní službě na Androidu — přežije zhasnutou
-obrazovku, má notifikaci s ovládáním a media session. F2 na to navazuje
-kategorií v Android Auto.
+Goal of F1: read aloud runs in a native service on Android — survives the
+screen turning off, has a notification with controls and a media session. F2
+builds on it with a category in Android Auto.
 
-### A.1 Seznam změn po souborech
+### A.1 List of changes by file
 
-**JavaScript (sdílené pro obě platformy):**
+**JavaScript (shared by both platforms):**
 
-| Soubor | Změna |
+| File | Change |
 | --- | --- |
-| `plugins/capacitor/AbsTTSPlayer.js` | **nový** — `registerPlugin('AbsTTSPlayer')` + web/fallback implementace: pokud nativní plugin není dostupný, deleguje na dnešní JS smyčku z mixinu (zachová funkčnost na starých buildech) |
-| `plugins/capacitor/index.js` | export nového pluginu |
-| `mixins/ttsPlayer.js` | řídicí smyčka se nahradí voláními `AbsTTSPlayer`; hooky pro extrakci a follow-along zůstávají; přibude `ttsExtractBook()` — extrakce **celé knihy** (ne jen aktuální jednotky) do `TTSBook` payloadu |
-| `components/readers/EpubReader.vue` | `ttsExtractBook()`: průchod spine přes `book.spine.each` + `section.load()` (bez renderování — netřeba zobrazovat, stačí DOM), odstavce + cfi per sekce |
-| `components/readers/MobiReader.vue` | `ttsExtractBook()`: celý dokument = jedna kapitola (případně dělení podle `h1/h2`) |
-| `components/readers/PdfReader.vue` | `ttsExtractBook()`: `getTextContent()` všech stránek; kapitola = stránka |
-| `components/readers/Reader.vue` | beze změn UI; lišta volá stejné metody (mixin je přesměruje na plugin) |
+| `plugins/capacitor/AbsTTSPlayer.js` | **new** — `registerPlugin('AbsTTSPlayer')` + web/fallback implementation: when the native plugin is not available, delegates to today's JS loop from the mixin (keeps old builds working) |
+| `plugins/capacitor/index.js` | export of the new plugin |
+| `mixins/ttsPlayer.js` | the control loop is replaced by `AbsTTSPlayer` calls; the hooks for extraction and follow-along stay; `ttsExtractBook()` is added — extraction of the **whole book** (not just the current unit) into the `TTSBook` payload |
+| `components/readers/EpubReader.vue` | `ttsExtractBook()`: walk the spine with `book.spine.each` + `section.load()` (without rendering — no need to display, the DOM is enough), paragraphs + cfi per section |
+| `components/readers/MobiReader.vue` | `ttsExtractBook()`: the whole document = one chapter (possibly split by `h1/h2`) |
+| `components/readers/PdfReader.vue` | `ttsExtractBook()`: `getTextContent()` of all pages; chapter = page |
+| `components/readers/Reader.vue` | no UI changes; the bar calls the same methods (the mixin redirects them to the plugin) |
 
 **Android:**
 
-| Soubor | Změna |
+| File | Change |
 | --- | --- |
-| `plugins/AbsTTSPlayer.kt` | **nový** — Capacitor bridge: `prepareBook`, `play`, `pause`, `stop`, `seekTo`, `nextChapter`, `prevChapter`, `setRate`, `setLanguage`, `getState`, `listCachedBooks`, `removeCachedBook`; eventy `onParagraph`, `onStateChange` přes `notifyListeners` |
-| `player/TTSPlaybackEngine.kt` | **nový** — vlastní engine (viz A.2) |
-| `player/TTSBookCache.kt` | **nový** — JSON cache + LRU (viz A.4) |
-| `data/TTSBook.kt` | **nový** — Jackson data classes `TTSBook/TTSChapter/TTSParagraph` (stejný styl jako `DeviceClasses.kt`) |
-| `player/PlayerNotificationService.kt` | režim `AUDIO / TTS`; start TTS zastaví ExoPlayer a naopak; playback state + metadata z enginu |
-| `player/MediaSessionCallback.kt` | routing callbacků do enginu v TTS režimu; `onPlayFromMediaId` pro `ebook__` id (F2) |
-| `player/BrowseTree.kt` | (F2) kategorie „E-knihy“ z `TTSBookCache.list()` |
+| `plugins/AbsTTSPlayer.kt` | **new** — Capacitor bridge: `prepareBook`, `play`, `pause`, `stop`, `seekTo`, `nextChapter`, `prevChapter`, `setRate`, `setLanguage`, `getState`, `listCachedBooks`, `removeCachedBook`; events `onParagraph`, `onStateChange` through `notifyListeners` |
+| `player/TTSPlaybackEngine.kt` | **new** — the engine itself (see A.2) |
+| `player/TTSBookCache.kt` | **new** — JSON cache + LRU (see A.4) |
+| `data/TTSBook.kt` | **new** — Jackson data classes `TTSBook/TTSChapter/TTSParagraph` (same style as `DeviceClasses.kt`) |
+| `player/PlayerNotificationService.kt` | `AUDIO / TTS` mode; starting TTS stops ExoPlayer and vice versa; playback state + metadata from the engine |
+| `player/MediaSessionCallback.kt` | routing of callbacks to the engine in TTS mode; `onPlayFromMediaId` for `ebook__` ids (F2) |
+| `player/BrowseTree.kt` | (F2) "Ebooks" category from `TTSBookCache.list()` |
 | `MainActivity.kt` | `registerPlugin(AbsTTSPlayer::class.java)` |
 
 **iOS (F3):** `App/plugins/AbsTTSPlayer.swift` (`CAPBridgedPlugin`),
-`Shared/player/TTSPlayer.swift` — stejný kontrakt pluginu; soubory a chování
-viz A.10.
+`Shared/player/TTSPlayer.swift` — the same plugin contract; files and
+behaviour in A.10.
 
-### A.2 `TTSPlaybackEngine` (Kotlin) — návrh třídy
+### A.2 `TTSPlaybackEngine` (Kotlin) — class outline
 
 ```kotlin
 class TTSPlaybackEngine(
   val context: Context,
-  val listener: Listener            // implementuje PlayerNotificationService
+  val listener: Listener            // implemented by PlayerNotificationService
 ) : TextToSpeech.OnInitListener {
 
   interface Listener {
-    fun onTTSStateChange(state: TTSState)          // → media session + notifikace + JS event
+    fun onTTSStateChange(state: TTSState)          // → media session + notification + JS event
     fun onTTSParagraph(chapterIdx: Int, paragraphIdx: Int, location: String?)
   }
 
@@ -270,8 +281,8 @@ class TTSPlaybackEngine(
   private var book: TTSBook? = null
   private var chapterIndex = 0
   private var paragraphIndex = 0
-  private var chunkQueue: ArrayDeque<String> = ArrayDeque()  // věty aktuálního odstavce
-  private var sessionId = 0                        // stejný „session guard“ jako v JS v1
+  private var chunkQueue: ArrayDeque<String> = ArrayDeque()  // sentences of the current paragraph
+  private var sessionId = 0                        // the same "session guard" as in JS v1
   var rate: Float = 1f
   var language: String = "en-US"
   var state: TTSState = STOPPED                    // STOPPED | PLAYING | PAUSED
@@ -279,360 +290,384 @@ class TTSPlaybackEngine(
   fun prepare(book: TTSBook, startChapter: Int, startParagraph: Int)
   fun play(); fun pause(); fun stop()
   fun seekTo(chapter: Int, paragraph: Int)
-  fun seekParagraph(delta: Int)                    // pro skip ±  z notifikace/BT
-  fun setPlaybackRate(r: Float)                    // tts.setSpeechRate + přepočet času
+  fun seekParagraph(delta: Int)                    // for skip ± from the notification/BT
+  fun setPlaybackRate(r: Float)                    // tts.setSpeechRate + time recalculation
 
-  // interní tok:
+  // internal flow:
   // speakNextChunk(): utteranceId = "$sessionId-$chapterIndex-$paragraphIndex-$chunkIdx"
   //   tts.speak(chunk, QUEUE_FLUSH, params, utteranceId)
   // UtteranceProgressListener.onDone(id):
-  //   - id nepatří aktuální session -> ignoruj (guard)
-  //   - další chunk / další odstavec (emit onTTSParagraph) / další kapitola / konec -> stop
-  // chunkování: port splitTextChunks() z mixins/ttsPlayer.js (~300 znaků, hranice vět)
+  //   - id does not belong to the current session -> ignore (guard)
+  //   - next chunk / next paragraph (emit onTTSParagraph) / next chapter / end -> stop
+  // chunking: port of splitTextChunks() from mixins/ttsPlayer.js (~300 characters, sentence boundaries)
 
-  // odhad času pro media session (A.3):
+  // time estimate for the media session (A.3):
   // positionMs = (charsSpokenBefore / CHARS_PER_SEC / rate) * 1000
   // durationMs = (book.totalChars / CHARS_PER_SEC / rate) * 1000, CHARS_PER_SEC ≈ 15
 }
 ```
 
-Zásady:
+Principles:
 
-- `TextToSpeech` init je async — volání `play()` před `onInit` se zařadí a
-  provede po READY; chybový stav initu → JS event + toast.
-- Jazyk: `tts.setLanguage(Locale.forLanguageTag(language))`; návratový kód
-  `LANG_MISSING_DATA / LANG_NOT_SUPPORTED` → event `onStateChange(error=…)`,
-  JS ukáže existující toast `MessageReadAloudNoVoice`.
-- Engine sám nic nekreslí ani nesynchronizuje — jen mluví a hlásí pozici.
+- `TextToSpeech` init is async — a `play()` call before `onInit` is queued
+  and executed after READY; an init error → JS event + toast.
+- Language: `tts.setLanguage(Locale.forLanguageTag(language))`; the return
+  codes `LANG_MISSING_DATA / LANG_NOT_SUPPORTED` → event
+  `onStateChange(error=…)`, JS shows the existing `MessageReadAloudNoVoice`
+  toast.
+- The engine draws nothing and syncs nothing itself — it only speaks and
+  reports the position.
 
-### A.3 Media session mapping (TTS režim)
+### A.3 Media session mapping (TTS mode)
 
-| MediaSession callback | Akce enginu |
+| MediaSession callback | Engine action |
 | --- | --- |
 | `onPlay` / `onPause` | `play()` / `pause()` |
-| `onStop` | `stop()` + ukončení TTS session (zpět do AUDIO režimu) |
-| `onSkipToNext` / `onSkipToPrevious` | `seekPages(+1)` / `seekPages(-1)` — posun o `pageStep` stran (pdf: kapitola = strana; jinak `pageChars` znaků na stranu, odhad ze čtečky) |
+| `onStop` | `stop()` + end of the TTS session (back to AUDIO mode) |
+| `onSkipToNext` / `onSkipToPrevious` | `seekPages(+1)` / `seekPages(-1)` — skip by `pageStep` pages (pdf: chapter = page; otherwise `pageChars` characters per page, estimated by the reader) |
 | `onFastForward` / `onRewind` | `seekParagraph(+1)` / `seekParagraph(-1)` |
-| `onSeekTo(pos)` | pos → znaky → nejbližší odstavec → `seekTo` |
+| `onSeekTo(pos)` | pos → characters → nearest paragraph → `seekTo` |
 | `onSetPlaybackSpeed(speed)` | `setPlaybackRate` |
 
-Metadata: `METADATA_KEY_TITLE` = titul knihy, `ARTIST` = autor,
-`ALBUM` = název kapitoly, `ART` = obálka z cache, `DURATION` = odhad (A.2).
-`PlaybackState` přepíná `STATE_PLAYING/PAUSED/STOPPED` podle enginu.
+Metadata: `METADATA_KEY_TITLE` = book title, `ARTIST` = author,
+`ALBUM` = chapter title, `ART` = cover from the cache, `DURATION` = estimate (A.2).
+`PlaybackState` switches `STATE_PLAYING/PAUSED/STOPPED` according to the engine.
 
 ### A.4 `TTSBookCache`
 
-- Adresář `filesDir/tts-cache/`, soubor `<libraryItemId>.json`
-  (serializovaný `TTSBook`) + `<libraryItemId>.meta.json` (titul, autor,
-  cesta k obálce, totalChars, lastAccessed — kvůli rychlému listování bez
-  načítání celé knihy).
-- `prepareBook` přepíše obě části a aktualizuje `lastAccessed`.
-- LRU limit: max ~20 knih nebo 50 MB (konfigurovatelné konstanty) — při
-  překročení se maže nejstarší `lastAccessed` (stejný princip jako epub
-  locations cache v JS).
-- Obálka: zkopíruje se do cache (Android Auto ji potřebuje i bez serveru).
+- Directory `filesDir/tts-cache/`, file `<libraryItemId>.json` (serialised
+  `TTSBook`) + `<libraryItemId>.meta.json` (title, author, cover path,
+  totalChars, lastAccessed — for fast listing without loading the whole book).
+- `prepareBook` overwrites both parts and updates `lastAccessed`.
+- LRU limit: max ~20 books or 50 MB (configurable constants) — when exceeded
+  the oldest `lastAccessed` is deleted (the same principle as the epub
+  locations cache in JS).
+- Cover: copied into the cache (Android Auto needs it even without the server).
 
-### A.5 Klíčové toky
+### A.5 Key flows
 
-**Start ze čtečky:** čtečka `ttsExtractBook()` → `prepareBook(book)`
-(uloží cache, připraví session) → `play({chapterIndex, paragraphIndex})` →
-služba přejde do TTS režimu (zastaví případné audio), foreground notifikace,
-engine mluví → `onParagraph` eventy → otevřená čtečka listuje follow-along.
+**Start from the reader:** the reader's `ttsExtractBook()` → `prepareBook(book)`
+(stores the cache, prepares the session) → `play({chapterIndex, paragraphIndex})` →
+the service switches to TTS mode (stops any audio), foreground notification,
+the engine speaks → `onParagraph` events → the open reader follows along.
 
-**Zhasnutá obrazovka:** WebView se suspenduje, engine ve foreground službě
-jede dál; po odemknutí čtečka z `getState()` dorovná pozici.
+**Screen off:** the WebView is suspended, the engine in the foreground service
+keeps running; after unlocking the reader catches up on the position from
+`getState()`.
 
-**Start z Android Auto (F2):** browse „E-knihy“ → `onPlayFromMediaId("ebook__<id>")`
-→ `TTSBookCache.load(id)` → `prepare` od poslední pozice (z uloženého
-progressu) → `play`. Aplikace nemusí být otevřená.
+**Start from Android Auto (F2):** browse "Ebooks" → `onPlayFromMediaId("ebook__<id>")`
+→ `TTSBookCache.load(id)` → `prepare` from the last position (from the saved
+progress) → `play`. The app does not have to be open.
 
-**Konec knihy:** engine `stop()` + `onStateChange(STOPPED, endOfBook=true)` →
-progress 100 %, notifikace zmizí, služba se vrátí do AUDIO režimu.
+**End of the book:** engine `stop()` + `onStateChange(STOPPED, endOfBook=true)` →
+progress 100 %, the notification disappears, the service returns to AUDIO mode.
 
-### A.6 Synchronizace průběhu
+### A.6 Progress sync
 
-Po každém odstavci engine spočítá `ebookLocation` (location odstavce) a
-`ebookProgress = charsSpokenTotal / totalChars`; zápis lokálně (Realm/DB
-stejně jako `updateLocalEbookProgress`) a na server `PATCH /api/me/progress/:id`
-— **throttling 15 s** jako u audia (`MediaProgressSyncer` vzor). Formát je
-identický s tím, co ukládá čtečka → obousměrná návaznost čtení/poslech.
+After every paragraph the engine computes `ebookLocation` (the paragraph's
+location) and `ebookProgress = charsSpokenTotal / totalChars`; written locally
+(Realm/DB like `updateLocalEbookProgress`) and to the server with
+`PATCH /api/me/progress/:id` — **throttled to 15 s** as for audio (the
+`MediaProgressSyncer` pattern). The format is identical to what the reader
+saves → reading and listening continue from each other in both directions.
 
-Odstavec bez vlastní location (nativní extrakce epubu — cfi odstavců potřebuje
-vyrenderovaný DOM) se ukládá jako `startCfi` kapitoly, tedy pořád jako platné
-epub cfi; holý spine href je až poslední možnost. Bez location se stará
-`ebookLocation` **nepřepisuje** — prázdná hodnota by čtečku vrátila na začátek
-knihy. Čtečka epubu pak pozici řeší v tomto pořadí: cfi odstavce → kapitola
-(cfi kapitoly nebo spine href) zpřesněná poměrem znaků z `ebookProgress`, pokud
-padne do stejné kapitoly → samotný poměr znaků (`locations.cfiFromPercentage`).
+A paragraph without its own location (native epub extraction — paragraph cfis
+need a rendered DOM) is saved as the chapter's `startCfi`, i.e. still a valid
+epub cfi; a bare spine href is the last resort. Without a location the old
+`ebookLocation` is **not overwritten** — an empty value would send the reader
+back to the start of the book. The epub reader then resolves the position in
+this order: paragraph cfi → chapter (chapter cfi or spine href) refined by the
+character ratio from `ebookProgress` when it falls into the same chapter → the
+character ratio alone (`locations.cfiFromPercentage`).
 
-### A.7 Pravidla fallbacku v JS
+### A.7 Fallback rules in JS
 
 ```js
 const useNative = Capacitor.getPlatform() === 'android'   // F1
   && Capacitor.isPluginAvailable('AbsTTSPlayer')
-// jinak: dnešní WebView smyčka (mixin) — iOS do F3, staré buildy, web
+// otherwise: today's WebView loop (mixin) — iOS until F3, old builds, web
 ```
 
-Mixin API vůči čtečkám i `Reader.vue` liště se nemění — přepnutí je
-transparentní.
+The mixin API towards the readers and the `Reader.vue` bar does not change —
+the switch is transparent.
 
-### A.8 Stav implementace F1
+### A.8 F1 implementation status
 
-První řez F1 je v kódu (commit „Implement F1 slice…“):
+The first slice of F1 is in the code (commit "Implement F1 slice…"):
 
-- [x] JS: `plugins/capacitor/AbsTTSPlayer.js`, `ttsExtractBook()` ve všech třech
-  čtečkách, mixin deleguje na nativní plugin, follow-along z `onParagraph`
-  eventů, re-sync stavu při otevření čtečky (`getState`)
+- [x] JS: `plugins/capacitor/AbsTTSPlayer.js`, `ttsExtractBook()` in all three
+  readers, the mixin delegates to the native plugin, follow-along from
+  `onParagraph` events, state re-sync when the reader opens (`getState`)
 - [x] Android: `TTSBook.kt`, `TTSBookCache.kt` (LRU), `TTSPlaybackEngine.kt`
-  (TextToSpeech + session guard + chunker), `AbsTTSPlayer.kt` bridge,
-  TTS sekce v `PlayerNotificationService` (pauza audia, foreground
-  MediaStyle notifikace s play/pause/stop akcemi), registrace v `MainActivity`
-- [x] Build a základní scénáře ověřeny na zařízení (Pixel 8 Pro): přehrávání,
-  zhasnutá obrazovka, ovládání ze zamykací obrazovky; **plná manuální
-  matice A.9 (Doze 30+ min, přerušení hovorem, …) zatím neproběhla**
-- [x] Media session takeover — při aktivní TTS session se sdílená media
-  session přepne na engine (odpojený MediaSessionConnector, PlaybackState
-  a metadata z TTSBook, routing dle A.3 vč. BT/headset tlačítek a seek
-  lišty); ověřeno na zařízení (zamykací obrazovka, Android 14+)
-- [x] Nativní sync průběhu dle A.6 — `TTSProgressSyncer` (15s timer, flush při
-  pauze/stopu/konci knihy): lokální položky přes `DbManager` + event do
-  WebView, server `PATCH /api/me/progress/:id` (lokální navázané na server
-  i streamované; na metered síti po 60 s jako `MediaProgressSyncer`);
-  konec knihy hlásí 100 % (`endOfBookReached`); **ověření na zařízení zatím
-  neproběhlo**
-- [x] F2: kategorie „Ebooks“ v `BrowseTree` (zobrazí se, když má
-  `TTSBookCache` obsah) + položky z `TTSBookCache.list()` v `onLoadChildren`
-  (media id `ebook__<libraryItemId>`, progress bar z uloženého
-  `ebookProgress`, funguje i bez serveru jako Downloads);
-  `onPlayFromMediaId` routuje `ebook__` id na `playTTS`, který obnoví
-  poslední pozici z uloženého progressu (`ebookLocation`, fallback poměr
-  znaků z `ebookProgress`; lokální položky z DB, streamované z progressu
-  načteného pro Android Auto); po `prepareBook`/`removeCachedBook` se volá
-  `notifyEbooksChanged()` (`notifyChildrenChanged`), jinak Android Auto
-  drží stale browse cache; debug build má label „ABS Debug“, aby šel
-  v Autu rozeznat od produkční aplikace; **ověřeno na DHU** (browse,
-  výběr, resume od poslední pozice, now-playing metadata, refresh
-  seznamu po nacachování další knihy)
-- [x] Audio focus pro TTS engine (`AudioFocusRequestCompat`,
-  USAGE_MEDIA/CONTENT_TYPE_SPEECH, žádost při play, uvolnění při každém
-  stopu vč. konce knihy a chyb): bez drženého fokusu Android Auto
-  neotevře media stream do auta — TTS mluvil do projection sinku
-  (Remote Submix), ale v autě bylo ticho, dokud si fokus nevzala
-  audiokniha; transient loss pauzne a po GAIN naváže, permanentní loss
-  zastaví; vedlejší přínos: TTS už nemluví přes jiné hrající aplikace
-- [x] F2+: e-knihy v Android Auto knihovnách a v Continue:
-  - `EpubTextExtractor` — nativní extrakce textu z EPUBu (bez WebView):
-    container.xml → OPF (spine, metadata, toc) přes XmlPullParser; obsahové
-    XHTML dokumenty se záměrně neparsují jako XML (reálné EPUBy porušují
-    well-formedness — nedeklarované entity apod.), text se získává
-    odstraněním tagů, kde uzavření blokového elementu tvoří hranici
-    odstavce; entity dekódovány (numerické + běžné pojmenované), kódování
-    dle BOM/XML deklarace. Odstavce nemají CFI (potřebovalo by DOM) —
-    `location=null`, resume ve čtečce přes href kapitoly
-    (`startLocation`), resume TTS přes poměr znaků z `ebookProgress`
-  - „Ebooks“ uzel v každé knihovně typu book (`__LIBRARY__<id>__EBOOKS`,
-    server filtr `ebooks.<b64>`, jen epub — jiné formáty nativně extrahovat
-    neumíme); klik na nenacachovanou knihu → stažení
-    `/api/items/<id>/ebook` do dočasného souboru → extrakce → uložení do
-    `TTSBookCache` → přehrávání od uloženého progressu; média session
-    ukazuje během stahování STATE_BUFFERING a při chybě STATE_ERROR
-    (`downloadAndPlayTTS` v `PlayerNotificationService`)
-  - Continue kategorie zahrnuje rozečtené e-knihy z TTS cache
-    (0 < ebookProgress < 1) pod hlavičkou „Ebooks“; kategorie se zobrazí
-    i bez rozposlouchaných audioknih; cache změny volají
+  (TextToSpeech + session guard + chunker), `AbsTTSPlayer.kt` bridge, the
+  TTS section in `PlayerNotificationService` (pausing audio, foreground
+  MediaStyle notification with play/pause/stop actions), registration in
+  `MainActivity`
+- [x] Build and the basic scenarios verified on a device (Pixel 8 Pro):
+  playback, screen off, lock screen controls; **the full manual matrix A.9
+  (Doze 30+ min, interruption by a call, …) has not been run yet**
+- [x] Media session takeover — with an active TTS session the shared media
+  session switches to the engine (the MediaSessionConnector disconnected,
+  PlaybackState and metadata from the TTSBook, routing per A.3 including
+  BT/headset buttons and the seek bar); verified on a device (lock screen,
+  Android 14+)
+- [x] Native progress sync per A.6 — `TTSProgressSyncer` (15 s timer, flush on
+  pause/stop/end of book): local items through `DbManager` + an event to the
+  WebView, server `PATCH /api/me/progress/:id` (local items linked to a
+  server as well as streamed ones; on a metered network after 60 s like
+  `MediaProgressSyncer`); the end of the book reports 100 %
+  (`endOfBookReached`); **not yet verified on a device**
+- [x] F2: "Ebooks" category in `BrowseTree` (shown when `TTSBookCache` has
+  content) + items from `TTSBookCache.list()` in `onLoadChildren` (media id
+  `ebook__<libraryItemId>`, progress bar from the saved `ebookProgress`,
+  works without a server like Downloads); `onPlayFromMediaId` routes
+  `ebook__` ids to `playTTS`, which restores the last position from the saved
+  progress (`ebookLocation`, fallback the character ratio from
+  `ebookProgress`; local items from the DB, streamed ones from the progress
+  loaded for Android Auto); `notifyEbooksChanged()` (`notifyChildrenChanged`)
+  is called after `prepareBook`/`removeCachedBook`, otherwise Android Auto
+  keeps a stale browse cache; the debug build is labelled "ABS Debug" so it
+  can be told apart from the production app in the car; **verified on the
+  DHU** (browse, selection, resume from the last position, now-playing
+  metadata, list refresh after another book is cached)
+- [x] Audio focus for the TTS engine (`AudioFocusRequestCompat`,
+  USAGE_MEDIA/CONTENT_TYPE_SPEECH, requested on play, released on every stop
+  including the end of the book and errors): without holding the focus
+  Android Auto does not open the media stream to the car — TTS spoke into
+  the projection sink (Remote Submix) but the car stayed silent until an
+  audiobook took the focus; a transient loss pauses and resumes after GAIN,
+  a permanent loss stops; side benefit: TTS no longer talks over other
+  playing apps
+- [x] F2+: ebooks in the Android Auto libraries and in Continue:
+  - `EpubTextExtractor` — native text extraction from an EPUB (without the
+    WebView): container.xml → OPF (spine, metadata, toc) through
+    XmlPullParser; the content XHTML documents are deliberately not parsed as
+    XML (real-world EPUBs break well-formedness — undeclared entities and the
+    like), the text is obtained by stripping tags, where the closing of a
+    block element forms a paragraph boundary; entities decoded (numeric +
+    the common named ones), encoding per BOM/XML declaration. Paragraphs have
+    no CFI (that would need a DOM) — `location=null`, resume in the reader
+    through the chapter href (`startLocation`), resume of TTS through the
+    character ratio from `ebookProgress`
+  - an "Ebooks" node in every library of type book (`__LIBRARY__<id>__EBOOKS`,
+    server filter `ebooks.<b64>`, epub only — other formats cannot be
+    extracted natively); a tap on a book not yet cached → download of
+    `/api/items/<id>/ebook` to a temporary file → extraction → storing in
+    `TTSBookCache` → playback from the saved progress; the media session
+    shows STATE_BUFFERING during the download and STATE_ERROR on failure
+    (`downloadAndPlayTTS` in `PlayerNotificationService`)
+  - the Continue category includes ebooks in progress from the TTS cache
+    (0 < ebookProgress < 1) under an "Ebooks" heading; the category is shown
+    even without audiobooks in progress; cache changes call
     `notifyChildrenChanged(CONTINUE_ROOT)`
-  - `BrowseTree` už neskrývá knihovny bez audio souborů, pokud jde o book
-    knihovnu s položkami (čistě e-knihovní knihovny); nacachované e-knihy
-    mají v seznamech ikonu staženo (EXTRA_DOWNLOAD_STATUS) a cover art ze
-    serveru (offline fallback na ikonu knihy); e-knihovní knihovna se tím
-    objeví i v „Recent“ — police nedávno přidaných nabízí epub položky
-    jako `ebook__` (předčítání), ostatní formáty skryje
-  - **ověření na DHU zatím neproběhlo**
-- [x] Výběr TTS enginu a hlasu:
-  - Nové plugin metody `getEngines`, `getVoices({ engine, language })`,
-    `setEngine`, `setVoice` a `openTTSSettings` (systémová obrazovka
-    `com.android.settings.TTS_SETTINGS`); enumerace přes krátkodobou
-    `TextToSpeech` instanci vlastněnou pluginem (resolve až z init
-    callbacku, funguje bez připravené knihy)
-  - `TTSPlaybackEngine`: pole `enginePackage`/`voiceName`, hlas se aplikuje
-    v `applyConfig()` (chybějící hlas = tichý fallback na default jazyka);
-    výměna enginu vyžaduje shutdown + novou instanci (`reinitTTS`) — stav
-    zůstává PLAYING, generační čítač `ttsGeneration` zahazuje init callbacky
-    vyměněných instancí
-  - `TTSBook` nese `ttsEngine`/`voice` (null = zachovat aktuální);
-    volby přicházejí v `prepareBook` payloadu a persistují v TTS cache
-  - UI: dialog `TtsSettingsDialog.vue` (ikona tune v TTS liště + řádek
-    v nastavení čtečky); klíče `ttsEngine` a `ttsVoices` (mapa per jazyk)
-    v `ereaderSettings`; web fallback umí jen hlas (číselný index do
-    `getSupportedVoices()`, resolvuje se čerstvě), výběr enginu se skryje
-  - Limitace: studený start z Android Auto u knihy nikdy nepuštěné ze
-    čtečky použije poslední aplikovaný engine a výchozí hlas (per-jazyk
-    hlas žije ve WebView, stejné omezení jako `ttsLanguageForBook`)
-- [x] Výchozí nastavení čtečky/předčítání a jazyk per kniha:
-  - Globální nastavení (`ereaderSettings`) žije ve store modulu
-    `store/ereader.js` a ukládá se přes `@capacitor/preferences`
-    (`$localStore.setEreaderSettings`), ne ve WebView localStorage, které
-    systém může zahodit — ztráta nastavení tiše vracela předčítání na
-    vestavěný výchozí jazyk. Stará hodnota z localStorage se při prvním
-    načtení zmigruje; chybějící jazyk se odvodí z jazyka aplikace.
-  - Upravuje se v Nastavení aplikace (sekce „Čtečka e-knih a předčítání“)
-    sdíleným formulářem `components/readers/EreaderSettingsForm.vue`, který
-    používá i modal nastavení ve čtečce.
-  - Jazyk předčítání je per kniha (`BOOK_SETTING_KEYS` v `Reader.vue`):
-    výchozí z metadat knihy — metadata ABS, pak `dc:language` epubu
-    (událost `loaded` čtečky), mapování `ttsLanguageForBookLanguage` v
-    `utils/ereaderSettings.js` — jinak globální výchozí. Ruční změna ve
-    čtečce se ukládá jako per-book override (`ebookSettings.ttsLanguage`),
-    „Použít pro všechny knihy“ ji povýší na výchozí.
-  - Vzhled per kniha je per zařízení (velikost písma z iPadu nesedí na
-    mobilu a naopak): `ebookSettings` na serveru nese sdílené klíče knihy
-    (`ttsLanguage`, `legacyEncoding`) a mapu `devices[deviceId]` se vzhledem
-    (`theme`, `font`, `fontScale`, `lineSpacing`, `textStroke`, `spread` —
-    `BOOK_DEVICE_SETTING_KEYS` v `utils/ereaderSettings.js`, helpery
-    `bookSettingsForDevice` / `withDeviceBookSettings`). Vzhled na nejvyšší
-    úrovni (starší verze aplikace, webový klient) se nepoužije, ale při
-    ukládání zůstane, stejně jako záznamy ostatních zařízení. ID zařízení
-    vrací nativní vrstva v `getDeviceData` (Android ID, iOS
-    `identifierForVendor`), bez něj se jednou vygeneruje a uloží do
-    preferences (`ereaderDeviceId`); drží ho `store/ereader.js`
-    (`ereader/getDeviceId`, načítá se s globálním nastavením). Lokální cache
-    `ereaderBookSettings:<id>` nese celý uložený objekt. Server (fork,
-    `MediaProgress.sanitizeEbookSettings`) musí `devices` a `ttsLanguage`
-    propustit — na starším serveru vzhled per zařízení přežije jen v lokální
-    cache do dalšího načtení progressu ze serveru.
-  - Nativní pojistky proti přepnutí do angličtiny: `applyConfig()` po
-    neúspěšném `setLanguage` zkusí jazyk bez regionu a pak hlas daného
-    jazyka z `engine.voices`; uložený hlas jiného jazyka se ignoruje
-    (Android `applyConfig`, iOS `resolveVoice`), jazyky se porovnávají přes
-    `TTSPlaybackEngine.sameLanguage` (2- i 3-písmenné kódy hlasů).
-    `ttsLanguageForBook` normalizuje název jazyka („Czech“) na tag.
-- [x] Synchronizace pozice mezi mobilem a autem (rozečtená kniha v mobilu →
-  poslech téže knihy v autě):
-  - Data pro Android Auto (`serverUserMediaProgress`, `serverItemsInProgress`)
-    se dosud načetla jednou za život služby a už se neobnovila — co uživatel
-    přečetl nebo poslechl v mobilu mezitím, se do auta nedostalo.
-    `MediaManager.refreshServerProgress()` je znovu načte při připojení auta
-    (`onGetRoot`) a při otevření kategorie Continue; throttle 10 s a
-    porovnání otisku dat brání smyčce `notifyChildrenChanged`. Neúspěšný
-    request nechá dosavadní cache být (Continue seznam se nesmí vyprázdnit
-    kvůli jednomu výpadku).
-  - `playTTS` u výběru v autě (bez explicitní pozice) **vždy** obnoví pozici
-    z uloženého progressu — i když engine tutéž knihu už drží. Dřív se
-    seek dělal jen při načtení jiné knihy, takže po `prepareBook` ze čtečky
-    (pozice se resetuje na začátek) auto předčítalo knihu od začátku.
-    Před resume se pozice položky stáhne ze serveru
-    (`GET /api/me/progress/:id`, 3s timeout pingClienta, při chybě se
-    pokračuje s cache).
-  - `savedEbookProgress` bere novější z (server progress, lokální DB) podle
-    `lastUpdate` — stažená kniha čtená offline v mobilu i streamovaná kniha
-    čtená na jiném zařízení tak vedou na stejnou pozici. Celá tabulka
-    lokálního progressu se čte z disku, seznamy si ji proto předávají
-    jednou místo per položku.
-  - Prázdné „play“ z auta (volant, „pusť audioknihu“) pouští naposledy
-    rozposlouchanou položku, případně naposledy rozečtenou e-knihu, když je
-    novější — místo `getFirstItem()` (první náhodná položka v cache).
-    Týká se `onPrepare`, `onPlayFromMediaId` bez id a hledání bez dotazu
-    v `MediaSessionCallback` i `MediaSessionPlaybackPreparer`.
-  - **ověření na DHU / v autě zatím neproběhlo**
-- [x] Synchronizace čtečky s běžící / pozastavenou relací předčítání a se
-  serverem po pobytu na pozadí (regrese hlášená po per-book nastavení):
-  - WebView se o progressu zapsaném jinde (nativní předčítání se zhasnutou
-    obrazovkou, auto, jiné zařízení) dozvídá jen ze socket eventů
-    (`user_updated`, `user_item_progress_updated`) a ty se v pozadí ztrácejí;
-    `user.mediaProgress` se jinak načítá jen při přihlášení. Čtečka se pak
-    otevřela na staré pozici a `loadBookSettingsOverride` vzal zastaralé
-    `ebookSettings: null` za „nic neuloženo“ a smazal lokální cache — kniha se
-    otevřela s výchozí velikostí písma. `Reader.vue` teď před připojením
-    komponenty čtečky (`progressReady`) znovu načte lokální progress z DB a
-    stáhne `GET /api/me/progress/:id` (3 s timeout) do store; u stažené knihy
-    zkopíruje novější pozici ze serveru do lokálního progressu (jen
-    `ebookLocation`/`ebookProgress`). „Žádná nastavení“ ve store platí jen po
-    tomto čerstvém načtení, jinak se použije lokální cache.
-  - Mixin v `created()` zjistí přes `getState()` běžící/pozastavenou relaci
-    téže knihy (`ttsNativeSessionState`); čtečky ji použijí jako cíl otevření
-    (epub: cfi odstavce → kapitola zpřesněná poměrem znaků → poměr sám,
-    pdf: stránka, mobi/dokument: index odstavce) místo uloženého progressu,
-    takže po otevření „nedohání“ předčítání přeskakováním stránek. Lišta
-    předčítání se při převzetí relace zobrazí sama.
-  - Play po pauze: když uživatel mezitím odlistoval jinam (hook
-    `ttsIsParagraphVisible`), předčítání pokračuje od první odstavce viditelné
-    stránky (`ttsSeekToVisiblePage`), ne od místa pauzy. Nativní i WebView cesta.
-  - Server (fork, `MediaProgress.applyProgressUpdate`): PATCH nesoucí jen
-    `ebookSettings` ukládá tiše (`save({ silent: true })`), takže neposouvá
-    `updatedAt`/`lastUpdate` — jinak „vyhrála“ starší serverová pozice nad
-    novější lokální (`syncLocalMediaProgressForUser`, `savedEbookProgress`
-    pro Android Auto). Android: `updateFromServerMediaProgress` nepřepíše
-    lokální pozici v knize serverovým progressem bez pozice (např. řádek
-    založený jen nastavením); iOS totéž v `LocalMediaProgress.swift`.
-  - Formát pozice pro úplnost: `ebookLocation` je epub CFI (adresa v DOM,
-    nezávislá na velikosti písma a stránkování), `ebookProgress` poměr
-    0–1 (čtečka z epubjs locations po 100 znacích, předčítání z poměru znaků).
-    Změna velikosti písma pozici neposouvá, jen přerozdělí stránky.
-  - **ověření na zařízení zatím neproběhlo**
-- [x] F3: iOS engine (viz A.10); **ověření na zařízení zatím neproběhlo**
-- [ ] F4: CarPlay — **odloženo na neurčito** (vyžaduje CarPlay audio
-  entitlement od Apple, tj. placený účet + schválení; sideload build ho
-  nést nemůže)
+  - `BrowseTree` no longer hides libraries without audio files when it is a
+    book library with items (ebook-only libraries); cached ebooks carry the
+    downloaded icon in the lists (EXTRA_DOWNLOAD_STATUS) and the cover art
+    from the server (offline fallback to the book icon); an ebook-only
+    library thereby also appears in "Recent" — the recently added shelf
+    offers epub items as `ebook__` (read aloud) and hides the other formats
+  - **not yet verified on the DHU**
+- [x] TTS engine and voice selection:
+  - New plugin methods `getEngines`, `getVoices({ engine, language })`,
+    `setEngine`, `setVoice` and `openTTSSettings` (the system screen
+    `com.android.settings.TTS_SETTINGS`); enumeration through a short-lived
+    `TextToSpeech` instance owned by the plugin (resolved from the init
+    callback, works without a prepared book)
+  - `TTSPlaybackEngine`: fields `enginePackage`/`voiceName`, the voice is
+    applied in `applyConfig()` (a missing voice = silent fallback to the
+    language default); switching the engine requires shutdown + a new
+    instance (`reinitTTS`) — the state stays PLAYING, the generation counter
+    `ttsGeneration` discards init callbacks of replaced instances
+  - `TTSBook` carries `ttsEngine`/`voice` (null = keep the current one); the
+    choices arrive in the `prepareBook` payload and persist in the TTS cache
+  - UI: dialog `TtsSettingsDialog.vue` (tune icon in the TTS bar + a row in
+    the reader settings); keys `ttsEngine` and `ttsVoices` (a map per
+    language) in `ereaderSettings`; the web fallback only supports the voice
+    (a numeric index into `getSupportedVoices()`, resolved fresh), the engine
+    choice is hidden
+  - Limitation: a cold start from Android Auto of a book never started from
+    the reader uses the last applied engine and the default voice (the
+    per-language voice lives in the WebView, the same limitation as
+    `ttsLanguageForBook`)
+- [x] Reader/read aloud defaults and the language per book:
+  - The global settings (`ereaderSettings`) live in the store module
+    `store/ereader.js` and are saved through `@capacitor/preferences`
+    (`$localStore.setEreaderSettings`), not in the WebView localStorage,
+    which the system may discard — losing the settings silently reset read
+    aloud to the built-in default language. The old localStorage value is
+    migrated on first load; a missing language is derived from the app
+    language.
+  - Edited in the app Settings (section "Ebook reader and read aloud")
+    through the shared form `components/readers/EreaderSettingsForm.vue`,
+    which the settings modal in the reader uses as well.
+  - The read aloud language is per book (`BOOK_SETTING_KEYS` in
+    `Reader.vue`): the default comes from the book metadata — ABS metadata,
+    then the epub's `dc:language` (the reader's `loaded` event), mapping
+    `ttsLanguageForBookLanguage` in `utils/ereaderSettings.js` — otherwise
+    the global default. A manual change in the reader is saved as a per-book
+    override (`ebookSettings.ttsLanguage`), "Use for all books" promotes it
+    to the default.
+  - The appearance per book is per device (the font size from an iPad does
+    not fit a phone and vice versa): `ebookSettings` on the server carries
+    the shared keys of the book (`ttsLanguage`, `legacyEncoding`) and a map
+    `devices[deviceId]` with the appearance (`theme`, `font`, `fontScale`,
+    `lineSpacing`, `textStroke`, `spread` — `BOOK_DEVICE_SETTING_KEYS` in
+    `utils/ereaderSettings.js`, helpers `bookSettingsForDevice` /
+    `withDeviceBookSettings`). A top-level appearance (older app versions,
+    the web client) is not used but is kept when saving, as are the entries
+    of other devices. The device id is returned by the native layer in
+    `getDeviceData` (Android ID, iOS `identifierForVendor`); without it one
+    is generated once and stored in preferences (`ereaderDeviceId`); it is
+    held by `store/ereader.js` (`ereader/getDeviceId`, loaded with the global
+    settings). The local cache `ereaderBookSettings:<id>` carries the whole
+    saved object. The server (fork, `MediaProgress.sanitizeEbookSettings`)
+    must let `devices` and `ttsLanguage` through — on an older server the
+    per-device appearance survives only in the local cache until the next
+    load of the progress from the server.
+  - Native safeguards against switching to English: `applyConfig()` after a
+    failed `setLanguage` tries the language without a region and then a voice
+    of that language from `engine.voices`; a saved voice of a different
+    language is ignored (Android `applyConfig`, iOS `resolveVoice`),
+    languages are compared through `TTSPlaybackEngine.sameLanguage` (2- and
+    3-letter voice codes). `ttsLanguageForBook` normalises a language name
+    ("Czech") to a tag.
+- [x] Position sync between the phone and the car (a book partly read on the
+  phone → listening to the same book in the car):
+  - The data for Android Auto (`serverUserMediaProgress`,
+    `serverItemsInProgress`) used to be loaded once per service lifetime and
+    never refreshed — whatever the user read or listened to on the phone in
+    the meantime did not reach the car. `MediaManager.refreshServerProgress()`
+    reloads it when the car connects (`onGetRoot`) and when the Continue
+    category is opened; a 10 s throttle and a fingerprint comparison of the
+    data prevent a `notifyChildrenChanged` loop. A failed request leaves the
+    existing cache alone (the Continue list must not empty because of one
+    outage).
+  - `playTTS` for a selection in the car (without an explicit position)
+    **always** restores the position from the saved progress — even when the
+    engine already holds the same book. Previously the seek happened only
+    when loading a different book, so after a `prepareBook` from the reader
+    (the position resets to the start) the car read the book from the
+    beginning. Before resuming, the item's position is fetched from the
+    server (`GET /api/me/progress/:id`, 3 s pingClient timeout, on error it
+    continues with the cache).
+  - `savedEbookProgress` takes the newer of (server progress, local DB) by
+    `lastUpdate` — a downloaded book read offline on the phone and a streamed
+    book read on another device thus lead to the same position. The whole
+    local progress table is read from disk, so the lists pass it along once
+    instead of per item.
+  - An empty "play" from the car (steering wheel, "play an audiobook") plays
+    the most recently listened item, or the most recently read ebook when it
+    is newer — instead of `getFirstItem()` (the first random item in the
+    cache). Applies to `onPrepare`, `onPlayFromMediaId` without an id and a
+    search without a query in `MediaSessionCallback` as well as
+    `MediaSessionPlaybackPreparer`.
+  - **not yet verified on the DHU / in a car**
+- [x] Sync of the reader with a running / paused read aloud session and with
+  the server after time in the background (a regression reported after the
+  per-book settings):
+  - The WebView learns about progress written elsewhere (native read aloud
+    with the screen off, the car, another device) only from socket events
+    (`user_updated`, `user_item_progress_updated`) and those are lost in the
+    background; `user.mediaProgress` is otherwise loaded only at login. The
+    reader then opened at the old position and `loadBookSettingsOverride`
+    took a stale `ebookSettings: null` for "nothing saved" and deleted the
+    local cache — the book opened with the default font size. `Reader.vue`
+    now, before mounting the reader component (`progressReady`), reloads the
+    local progress from the DB and fetches `GET /api/me/progress/:id` (3 s
+    timeout) into the store; for a downloaded book it copies the newer
+    position from the server into the local progress (only
+    `ebookLocation`/`ebookProgress`). "No settings" in the store counts only
+    after this fresh load, otherwise the local cache is used.
+  - The mixin in `created()` detects a running/paused session of the same
+    book through `getState()` (`ttsNativeSessionState`); the readers use it
+    as the opening target (epub: paragraph cfi → chapter refined by the
+    character ratio → the ratio alone, pdf: page, mobi/document: paragraph
+    index) instead of the saved progress, so after opening the reader does
+    not "catch up" with read aloud by flipping pages. The read aloud bar
+    shows itself when a session is taken over.
+  - Play after a pause: when the user has paged elsewhere in the meantime
+    (hook `ttsIsParagraphVisible`), read aloud continues from the first
+    paragraph of the visible page (`ttsSeekToVisiblePage`), not from the
+    pause spot. Native and WebView paths alike.
+  - Server (fork, `MediaProgress.applyProgressUpdate`): a PATCH carrying only
+    `ebookSettings` saves silently (`save({ silent: true })`), so it does not
+    bump `updatedAt`/`lastUpdate` — otherwise an older server position "won"
+    over a newer local one (`syncLocalMediaProgressForUser`,
+    `savedEbookProgress` for Android Auto). Android:
+    `updateFromServerMediaProgress` does not overwrite the local position in
+    a book with a server progress without a position (e.g. a row created by
+    the settings alone); iOS the same in `LocalMediaProgress.swift`.
+  - The position format, for completeness: `ebookLocation` is an epub CFI (an
+    address in the DOM, independent of the font size and pagination),
+    `ebookProgress` a ratio 0–1 (the reader from the epubjs locations every
+    100 characters, read aloud from the character ratio). Changing the font
+    size does not move the position, it only re-paginates.
+  - **not yet verified on a device**
+- [x] F3: iOS engine (see A.10); **not yet verified on a device**
+- [ ] F4: CarPlay — **postponed indefinitely** (requires the CarPlay audio
+  entitlement from Apple, i.e. a paid account + approval; a sideload build
+  cannot carry it)
 
-### A.9 Testovací plán F1
+### A.9 F1 test plan
 
-- **Unit (Kotlin):** chunker (parita s JS `splitTextChunks` na sadě českých
-  a anglických textů vč. zkratek a dlouhých vět), výpočet pozice/odhadu času,
-  LRU cache.
-- **Manuální matice:** zhasnutá obrazovka 30+ min / Doze (`adb shell dumpsys
-  deviceidle force-idle`) / BT ovládání / přepnutí audio↔TTS / změna rychlosti
-  a jazyka za běhu / kniha bez českého hlasu / prázdné kapitoly / restart
-  služby systémem (`onStartCommand` recovery).
-- **Android Auto (F2):** Desktop Head Unit (DHU) — browse, výběr, ovládání,
-  metadata, obnovení po odpojení. Pozn.: s Android Auto 17.x funguje DHU
-  jen v **USB accessory režimu** (`desktop-head-unit --usb`, telefon na
-  kabelu, zapnuté Ladění USB; na Windows ručně přiřadit WinUSB driver na
-  „Android Accessory Interface“ ve Správci zařízení). Head unit server
-  přes `adb forward tcp:5277` je mrtvá cesta — server spojení přijme,
-  ale handshake nikdy nepřečte. DHU spouštět s vlastní konzolí
-  (`Start-Process`), na zavřeném stdin se ukončí.
-- **Regrese:** přehrávání audioknih (focus, notifikace, Cast) nesmí být
-  TTS režimem dotčeno.
+- **Unit (Kotlin):** the chunker (parity with the JS `splitTextChunks` on a
+  set of Czech and English texts including abbreviations and long
+  sentences), position/time estimate computation, the LRU cache.
+- **Manual matrix:** screen off 30+ min / Doze (`adb shell dumpsys
+  deviceidle force-idle`) / BT controls / switching audio↔TTS / changing the
+  rate and language while running / a book without a Czech voice / empty
+  chapters / service restart by the system (`onStartCommand` recovery).
+- **Android Auto (F2):** Desktop Head Unit (DHU) — browse, selection,
+  controls, metadata, recovery after a disconnect. Note: with Android Auto
+  17.x the DHU only works in **USB accessory mode** (`desktop-head-unit
+  --usb`, the phone on a cable, USB debugging on; on Windows manually assign
+  the WinUSB driver to "Android Accessory Interface" in Device Manager). The
+  head unit server over `adb forward tcp:5277` is a dead end — the server
+  accepts the connection but never reads the handshake. Launch the DHU with
+  its own console (`Start-Process`); it exits on a closed stdin.
+- **Regression:** audiobook playback (focus, notification, Cast) must not be
+  affected by the TTS mode.
 
-### A.10 Stav implementace F3 (iOS)
+### A.10 F3 implementation status (iOS)
 
-Port F1 na iOS se stejným kontraktem pluginu — JS vrstva se nemění, jen
-`isNativeTTSPlayerAvailable()` bere i platformu `ios`.
+A port of F1 to iOS with the same plugin contract — the JS layer does not
+change, only `isNativeTTSPlayerAvailable()` accepts the `ios` platform too.
 
-| Soubor | Role |
+| File | Role |
 | --- | --- |
-| `ios/App/App/plugins/AbsTTSPlayer.swift` | Capacitor bridge (`CAPBridgedPlugin`), stejné metody a eventy jako Kotlin plugin; registrace v `MyViewController.capacitorDidLoad` |
-| `ios/App/Shared/player/TTSPlayer.swift` | engine: `AVSpeechSynthesizer`, chunker (port `splitTextChunks`), session guard přes aktuální utterance, seek po odstavcích/kapitolách/stranách, audio session `.playback/.spokenAudio` (přerušení hovorem pauzne a po konci naváže, odpojení sluchátek pauzne), `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` (mapování dle A.3: previous/next = strany, seek = odstavec, scrubber = odhad času, změna rychlosti) |
-| `ios/App/Shared/player/TTSProgressSyncer.swift` | sync průběhu dle A.6: 15s timer, lokální `LocalMediaProgress` (Realm) + event do WebView přes `AbsAudioPlayer.onLocalMediaProgressUpdate`, server `PATCH api/me/progress/:id` (metered síť po 60 s) |
-| `ios/App/Shared/player/TTSBookCache.swift` | JSON cache + LRU (A.4) v Application Support/`tts-cache` |
-| `ios/App/Shared/models/TTSBook.swift` | `Codable` model `TTSBook/TTSChapter/TTSParagraph/TTSBookSummary` s tolerantním dekódováním payloadu z JS |
-| `ios/App/Shared/player/PlayerHandler.swift` | start audioknihy ukončí běžící TTS session (sdílený audio výstup a Now Playing) a naopak TTS pauzne audio přehrávač |
+| `ios/App/App/plugins/AbsTTSPlayer.swift` | Capacitor bridge (`CAPBridgedPlugin`), the same methods and events as the Kotlin plugin; registered in `MyViewController.capacitorDidLoad` |
+| `ios/App/Shared/player/TTSPlayer.swift` | engine: `AVSpeechSynthesizer`, chunker (port of `splitTextChunks`), session guard through the current utterance, seeking by paragraphs/chapters/pages, audio session `.playback/.spokenAudio` (an interruption by a call pauses and resumes when it ends, unplugging headphones pauses), `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` (mapping per A.3: previous/next = pages, seek = paragraph, scrubber = time estimate, rate change) |
+| `ios/App/Shared/player/TTSProgressSyncer.swift` | progress sync per A.6: 15 s timer, local `LocalMediaProgress` (Realm) + an event to the WebView through `AbsAudioPlayer.onLocalMediaProgressUpdate`, server `PATCH api/me/progress/:id` (metered network after 60 s) |
+| `ios/App/Shared/player/TTSBookCache.swift` | JSON cache + LRU (A.4) in Application Support/`tts-cache` |
+| `ios/App/Shared/models/TTSBook.swift` | `Codable` model `TTSBook/TTSChapter/TTSParagraph/TTSBookSummary` with tolerant decoding of the payload from JS |
+| `ios/App/Shared/player/PlayerHandler.swift` | starting an audiobook ends a running TTS session (shared audio output and Now Playing) and conversely TTS pauses the audio player |
 
-Rozdíly proti Androidu:
+Differences from Android:
 
-- **Engine/hlas:** iOS má jediný engine — `getEngines()` vrací prázdný seznam
-  a dialog nastavení řádek enginu skryje; `setEngine()` je no-op. Hlasy
-  (`getVoices`) mají jako `name` stabilní `identifier` (jména se opakují
-  napříč kvalitami) a zobrazovaný `label` (např. „Zuzana (Enhanced)“).
-  `openTTSSettings()` otevře aplikaci Nastavení — hlasy se stahují
-  v Zpřístupnění → Předčítaný obsah → Hlasy.
-- **Rychlost:** `AVSpeechUtterance.rate` není násobek; mapování
-  `0.5 * násobek` pod 1× a `0.5 + (násobek − 1) · 0.25` nad 1× (2× ≈ 0.75).
-- **Pauza:** stejně jako na Androidu se po pauze mluví znovu od začátku
-  aktuálního chunku (max ~300 znaků).
-- **Bez Android Auto ekvivalentu:** žádný browse strom, nativní extrakce
-  epubu ani Continue kategorie; `play({ libraryItemId })` pro jinou než
-  připravenou knihu ji vezme z cache a naváže z uložené pozice (lokální
-  DB / server, novější vyhrává) — použije se jen při obnově session ze
-  čtečky.
-- **Bez CarPlay** (F4) — obrazovka „Právě hraje“ v CarPlay ale zobrazí
-  a ovládá běžící předčítání jako jakékoli jiné audio.
+- **Engine/voice:** iOS has a single engine — `getEngines()` returns an empty
+  list and the settings dialog hides the engine row; `setEngine()` is a
+  no-op. Voices (`getVoices`) use the stable `identifier` as `name` (names
+  repeat across qualities) and a displayed `label` (e.g. "Zuzana
+  (Enhanced)"). `openTTSSettings()` opens the Settings app — voices are
+  downloaded in Accessibility → Spoken Content → Voices.
+- **Rate:** `AVSpeechUtterance.rate` is not a multiplier; the mapping is
+  `0.5 * multiplier` below 1× and `0.5 + (multiplier − 1) · 0.25` above 1×
+  (2× ≈ 0.75).
+- **Pause:** as on Android, after a pause speaking restarts from the
+  beginning of the current chunk (max ~300 characters).
+- **No Android Auto equivalent:** no browse tree, native epub extraction or
+  Continue category; `play({ libraryItemId })` for a book other than the
+  prepared one takes it from the cache and resumes from the saved position
+  (local DB / server, the newer wins) — used only when restoring a session
+  from the reader.
+- **No CarPlay** (F4) — the CarPlay "Now Playing" screen does show and
+  control a running read aloud like any other audio, though.
 
-Build a distribuce: `.github/workflows/build-ios.yml` (nepodepsaný IPA
-`audiobookshelf-ios.ipa` + SideStore source feed `sidestore-source.json`
-z `scripts/make-sidestore-source.py`, release `latest-ios`), postup instalace
-přes iloader/SideStore v `docs/ios-sideload.md`.
+Build and distribution: `.github/workflows/build-ios.yml` (unsigned IPA
+`audiobookshelf-ios.ipa` + SideStore source feed `sidestore-source.json` from
+`scripts/make-sidestore-source.py`, release `latest-ios`), installation steps
+through iloader/SideStore in `docs/ios-sideload.md`.
 
-Neověřeno na zařízení: celá manuální matice A.9 pro iOS (zamčená obrazovka
-30+ min, přerušení hovorem, sluchátka, přepnutí audio↔TTS, kniha bez
-českého hlasu, sync průběhu).
+Not verified on a device: the whole manual matrix A.9 for iOS (locked screen
+30+ min, interruption by a call, headphones, switching audio↔TTS, a book
+without a Czech voice, progress sync).
