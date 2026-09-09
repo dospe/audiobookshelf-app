@@ -484,6 +484,22 @@ První řez F1 je v kódu (commit „Implement F1 slice…“):
     `utils/ereaderSettings.js` — jinak globální výchozí. Ruční změna ve
     čtečce se ukládá jako per-book override (`ebookSettings.ttsLanguage`),
     „Použít pro všechny knihy“ ji povýší na výchozí.
+  - Vzhled per kniha je per zařízení (velikost písma z iPadu nesedí na
+    mobilu a naopak): `ebookSettings` na serveru nese sdílené klíče knihy
+    (`ttsLanguage`, `legacyEncoding`) a mapu `devices[deviceId]` se vzhledem
+    (`theme`, `font`, `fontScale`, `lineSpacing`, `textStroke`, `spread` —
+    `BOOK_DEVICE_SETTING_KEYS` v `utils/ereaderSettings.js`, helpery
+    `bookSettingsForDevice` / `withDeviceBookSettings`). Vzhled na nejvyšší
+    úrovni (starší verze aplikace, webový klient) se nepoužije, ale při
+    ukládání zůstane, stejně jako záznamy ostatních zařízení. ID zařízení
+    vrací nativní vrstva v `getDeviceData` (Android ID, iOS
+    `identifierForVendor`), bez něj se jednou vygeneruje a uloží do
+    preferences (`ereaderDeviceId`); drží ho `store/ereader.js`
+    (`ereader/getDeviceId`, načítá se s globálním nastavením). Lokální cache
+    `ereaderBookSettings:<id>` nese celý uložený objekt. Server (fork,
+    `MediaProgress.sanitizeEbookSettings`) musí `devices` a `ttsLanguage`
+    propustit — na starším serveru vzhled per zařízení přežije jen v lokální
+    cache do dalšího načtení progressu ze serveru.
   - Nativní pojistky proti přepnutí do angličtiny: `applyConfig()` po
     neúspěšném `setLanguage` zkusí jazyk bez regionu a pak hlas daného
     jazyka z `engine.voices`; uložený hlas jiného jazyka se ignoruje

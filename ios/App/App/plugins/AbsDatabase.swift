@@ -9,6 +9,7 @@ import Foundation
 import Capacitor
 import RealmSwift
 import SwiftUI
+import UIKit
 
 extension String {
 
@@ -138,7 +139,9 @@ public class AbsDatabase: CAPPlugin, CAPBridgedPlugin {
         call.resolve([
             "serverConnectionConfigs": configs.map { config in convertServerConnectionConfigToJSON(config: config) },
             "lastServerConnectionConfigId": configs.first { config in config.index == index }?.id as Any,
-            "deviceSettings": deviceSettingsToJSON(settings: settings)
+            "deviceSettings": deviceSettingsToJSON(settings: settings),
+            // Id of this device (the one reported in the playback sessions) for the settings kept per device
+            "deviceId": UIDevice.current.identifierForVendor?.uuidString as Any
         ])
     }
 

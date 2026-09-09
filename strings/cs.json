@@ -314,7 +314,7 @@
   "MessageAudiobookshelfServerNotConnected": "Server Audiobookshelf není připojen",
   "MessageAudiobookshelfServerRequired": "<strong>Důležité!</strong> Tato aplikace je navržena, aby pracovala se serverem Audiobookshelf, který hostuje buď vy, nebo někdo, koho znáte. Tato aplikace neposkytuje žádný obsah.",
   "MessageBookSettingsDefault": "Používá se výchozí nastavení",
-  "MessageBookSettingsSaved": "Nastavení je uloženo pro tuto knihu",
+  "MessageBookSettingsSaved": "Nastavení je uloženo pro tuto knihu (vzhled pro toto zařízení)",
   "MessageBookshelfEmpty": "Knihovna je prázdná",
   "MessageConfirmAppExit": "Opravdu chcete opustit aplikaci?",
   "MessageConfirmDeleteEpisodeDownloadQueue": "Přejete si skutečně vymazat frontu stahování epizod?",

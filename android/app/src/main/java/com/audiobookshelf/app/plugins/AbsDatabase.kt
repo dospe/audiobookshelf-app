@@ -2,6 +2,7 @@ package com.audiobookshelf.app.plugins
 
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import com.audiobookshelf.app.MainActivity
 import com.audiobookshelf.app.data.*
@@ -48,7 +49,10 @@ class AbsDatabase : Plugin() {
   fun getDeviceData(call:PluginCall) {
     GlobalScope.launch(Dispatchers.IO) {
       val deviceData = DeviceManager.dbManager.getDeviceData()
-      call.resolve(JSObject(jacksonMapper.writeValueAsString(deviceData)))
+      val deviceDataJson = JSObject(jacksonMapper.writeValueAsString(deviceData))
+      // Id of this device (the one reported in the playback sessions) for the settings kept per device
+      deviceDataJson.put("deviceId", Settings.Secure.getString(mainActivity.contentResolver, Settings.Secure.ANDROID_ID))
+      call.resolve(deviceDataJson)
     }
   }
 

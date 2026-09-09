@@ -104,3 +104,74 @@ export function normalizeEreaderSettings(stored) {
 export function withTtsVoice(settings, voice) {
   return { ...settings, ttsVoices: { ...(settings.ttsVoices || {}), [settings.ttsLanguage]: voice || '' } }
 }
+
+/**
+ * Settings remembered per book (on the server, `ebookSettings` of the media
+ * progress) when they differ from the defaults of the book. The appearance is
+ * kept per device - a font size that suits a tablet is too big for a phone -
+ * while the read aloud language and the text encoding are properties of the
+ * book, shared by every device.
+ *
+ * Stored shape: `{ ttsLanguage, legacyEncoding, devices: { [deviceId]: { theme, fontScale, ... } } }`.
+ * Appearance keys at the top level were saved by older app versions or by the
+ * web client - they came from any device, so they are kept but not used.
+ */
+export const BOOK_DEVICE_SETTING_KEYS = Object.freeze(['theme', 'font', 'fontScale', 'lineSpacing', 'textStroke', 'spread'])
+export const BOOK_SHARED_SETTING_KEYS = Object.freeze(['legacyEncoding', 'ttsLanguage'])
+export const BOOK_SETTING_KEYS = Object.freeze([...BOOK_DEVICE_SETTING_KEYS, ...BOOK_SHARED_SETTING_KEYS])
+
+function isObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function pickSettings(source, keys) {
+  const picked = {}
+  if (!isObject(source)) return picked
+  for (const key of keys) {
+    if (source[key] === undefined || source[key] === null) continue
+    picked[key] = source[key]
+  }
+  return picked
+}
+
+/**
+ * The per-book override of a device out of the stored per-book settings: the
+ * shared keys and the appearance saved for the device.
+ * @param {Object|null} stored - the settings as stored (see BOOK_DEVICE_SETTING_KEYS)
+ * @param {string} deviceId
+ * @returns {Object|null} the override, null when the device has none
+ */
+export function bookSettingsForDevice(stored, deviceId) {
+  if (!isObject(stored)) return null
+  const override = {
+    ...pickSettings(stored, BOOK_SHARED_SETTING_KEYS),
+    ...pickSettings(deviceId && isObject(stored.devices) ? stored.devices[deviceId] : null, BOOK_DEVICE_SETTING_KEYS)
+  }
+  return Object.keys(override).length ? override : null
+}
+
+/**
+ * The stored per-book settings with the override of a device replaced. The
+ * entries of the other devices and any top-level appearance of older clients
+ * are kept.
+ * @param {Object|null} stored - the settings as stored
+ * @param {Object|null} override - the per-book override of the device (its diff from the book defaults)
+ * @param {string} deviceId
+ * @returns {Object|null} the settings to store, null when nothing is left
+ */
+export function withDeviceBookSettings(stored, override, deviceId) {
+  const result = isObject(stored) ? { ...stored } : {}
+  for (const key of BOOK_SHARED_SETTING_KEYS) delete result[key]
+  Object.assign(result, pickSettings(override, BOOK_SHARED_SETTING_KEYS))
+
+  const devices = isObject(result.devices) ? { ...result.devices } : {}
+  if (deviceId) {
+    const deviceSettings = pickSettings(override, BOOK_DEVICE_SETTING_KEYS)
+    if (Object.keys(deviceSettings).length) devices[deviceId] = deviceSettings
+    else delete devices[deviceId]
+  }
+  if (Object.keys(devices).length) result.devices = devices
+  else delete result.devices
+
+  return Object.keys(result).length ? result : null
+}
