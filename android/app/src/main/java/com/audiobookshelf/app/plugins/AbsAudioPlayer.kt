@@ -127,6 +127,11 @@ class AbsAudioPlayer : Plugin() {
     notifyListeners(evtName, ret)
   }
 
+  override fun handleOnDestroy() {
+    castManager?.detach()
+    super.handleOnDestroy()
+  }
+
   override fun handleOnPause() {
     super.handleOnPause()
     isInForeground = false
@@ -325,10 +330,10 @@ class AbsAudioPlayer : Plugin() {
 
   @PluginMethod
   fun seek(call: PluginCall) {
-    val time:Int = call.getInt("value", 0) ?: 0 // Value in seconds
+    val time: Double = call.getDouble("value", 0.0) ?: 0.0 // Value in seconds, fractional
     Log.d(tag, "seek action to $time")
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.seekPlayer(time * 1000L) // convert to ms
+      playerNotificationService.seekPlayer((time * 1000L).toLong())
       call.resolve()
     }
   }

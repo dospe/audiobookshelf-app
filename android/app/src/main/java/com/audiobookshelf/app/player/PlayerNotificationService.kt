@@ -59,6 +59,11 @@ import com.google.android.exoplayer2.upstream.*
 import java.io.File
 import java.util.*
 import kotlin.concurrent.schedule
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 
 const val SLEEP_TIMER_WAKE_UP_EXPIRATION = 120000L // 2m
@@ -125,6 +130,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   var currentPlaybackSession: PlaybackSession? = null
   private var initialPlaybackRate: Float? = null
+
+  private val metadataScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+  private var metadataArtJob: Job? = null
 
   private var isAndroidAuto = false
 
@@ -840,6 +848,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     ttsEngine?.release()
     mediaSession.release()
     mediaProgressSyncer.reset()
+    metadataScope.cancel()
 
     super.onDestroy()
   }
@@ -937,6 +946,12 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     transportControls = mediaController.transportControls
 
     mediaSessionConnector = MediaSessionConnector(mediaSession)
+    // Without this, the connector's default metadata provider rebuilds metadata from the
+    // player's own state on media item transitions/timeline changes, dropping the cover art
+    // bitmap that PlaybackSession.resolveCoverBitmapAsync resolves separately.
+    mediaSessionConnector.setMediaMetadataProvider { _ ->
+      currentPlaybackSession?.getMediaMetadataCompat(ctx) ?: MediaMetadataCompat.Builder().build()
+    }
     val queueNavigator: TimelineQueueNavigator =
             object : TimelineQueueNavigator(mediaSession) {
               override fun getSupportedQueueNavigatorActions(player: Player): Long {
@@ -1075,8 +1090,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     // Audio and read aloud share the output and media session - end any TTS session first
     ttsEngineIfSessionActive()?.stop()
 
-    val metadata = playbackSession.getMediaMetadataCompat(ctx)
-    mediaSession.setMetadata(metadata)
     val mediaItems = playbackSession.getMediaItems(ctx)
     val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
     initialPlaybackRate = playbackRate
@@ -1103,6 +1116,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     DeviceManager.setLastPlaybackSession(
             playbackSession
     ) // Save playback session to use when app is closed
+
+    metadataArtJob?.cancel()
+    metadataArtJob =
+            playbackSession.resolveCoverBitmapAsync(ctx, metadataScope) {
+              mediaSessionConnector.invalidateMediaSessionMetadata()
+            }
+    mediaSessionConnector.invalidateMediaSessionMetadata()
 
     AbsLogger.info("PlayerNotificationService", "preparePlayer: Started playback session for item ${currentPlaybackSession?.mediaItemId}. MediaPlayer ${currentPlaybackSession?.mediaPlayer}")
     // Notify client
