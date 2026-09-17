@@ -51,7 +51,8 @@ class BrowseTree(
       putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToDrawable(context, R.drawable.md_book_open_blank_variant_outline).toString())
     }.build()
 
-    // Shown for audio items in progress and for partially read ebooks in the TTS cache
+    // Shown for audio items in progress and for partially read ebooks (in the
+    // TTS cache or in progress on the server)
     if (itemsInProgress.isNotEmpty() || hasEbooksInProgress) {
       rootList += continueListeningMetadata
     }

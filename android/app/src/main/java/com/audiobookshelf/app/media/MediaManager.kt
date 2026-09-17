@@ -48,6 +48,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private val PROGRESS_REFRESH_INTERVAL = 10000L
   var serverUserMediaProgress:MutableList<MediaProgress> = mutableListOf()
   var serverItemsInProgress = listOf<ItemInProgress>()
+  // Epubs in progress on the server without audio (read on the phone or on
+  // any device): offered in the Continue list of the car for read aloud
+  var serverEbooksInProgress = listOf<ItemInProgress>()
   var serverLibraries = listOf<Library>()
 
   var userSettingsPlaybackRate:Float? = null
@@ -168,6 +171,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       isLibraryPodcastsCached = hashMapOf()
       cachedLibraryEbooks = hashMapOf()
       serverItemsInProgress = listOf()
+      serverEbooksInProgress = listOf()
       lastProgressRefresh = 0L
       allLibraryPersonalizationsDone = false
       libraryPersonalizationsDone = 0
@@ -185,7 +189,10 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   /**
-   * Load the items in progress from the server. A failed request keeps what is
+   * Load the items in progress from the server: the audio items for the
+   * Continue list, and separately the epubs in progress (a book read on the
+   * phone, never read aloud) the car offers for read aloud - only epubs, the
+   * format the native text extraction handles. A failed request keeps what is
    * already cached - the car should not lose its Continue list over one
    * request that did not go through
    */
@@ -195,6 +202,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         serverItemsInProgress = items.filter {
           val libraryItem = it.libraryItemWrapper as LibraryItem
           libraryItem.checkHasTracks()
+        }
+        serverEbooksInProgress = items.filter {
+          val libraryItem = it.libraryItemWrapper as LibraryItem
+          val isEpub = (libraryItem.media as? Book)?.getEbookFormatValue() == "epub"
+          isEpub && !libraryItem.checkHasTracks()
         }
       }
       cb(serverItemsInProgress)
@@ -207,7 +219,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    * be told to reload its cached browse results)
    */
   private fun progressSignature(): String {
-    val items = serverItemsInProgress.joinToString(",") {
+    val items = (serverItemsInProgress + serverEbooksInProgress).joinToString(",") {
       "${it.libraryItemWrapper.id}:${it.episode?.id ?: ""}:${it.progressLastUpdate}"
     }
     val progress = serverUserMediaProgress.joinToString(",") { "${it.id}:${it.lastUpdate}" }

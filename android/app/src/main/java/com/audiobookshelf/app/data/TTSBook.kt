@@ -28,7 +28,15 @@ data class TTSBook(
    * displayed page (0 = unknown, the engine falls back to a default).
    */
   var pageStep: Int = DEFAULT_PAGE_STEP,
-  var pageChars: Int = 0
+  var pageChars: Int = 0,
+  /**
+   * Read aloud language of the book itself (library metadata, then the ebook
+   * file), one of the offered languages or null when unknown. [language] is
+   * what the reader chose to speak with; a book resumed without the reader
+   * (Android Auto) resolves its language again from the language saved for the
+   * book, this, and the global default (PlayerNotificationService.resolveTTSLanguage).
+   */
+  var bookLanguage: String? = null
 ) {
   constructor() : this("", null, "", null, "en-US", 1f, null, null, "", mutableListOf(), 0)
 

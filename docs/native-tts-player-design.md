@@ -456,9 +456,16 @@ The first slice of F1 is in the code (commit "Implement F1 slice…"):
     `TTSBookCache` → playback from the saved progress; the media session
     shows STATE_BUFFERING during the download and STATE_ERROR on failure
     (`downloadAndPlayTTS` in `PlayerNotificationService`)
-  - the Continue category includes ebooks in progress from the TTS cache
-    (0 < ebookProgress < 1) under an "Ebooks" heading; the category is shown
-    even without audiobooks in progress; cache changes call
+  - the Continue category includes ebooks in progress under an "Ebooks"
+    heading: the books in the TTS cache (0 < ebookProgress < 1) and the epubs
+    the server lists as in progress (`/api/me/items-in-progress`, kept apart
+    from the audio items in `MediaManager.serverEbooksInProgress`) — a book
+    read in the reader on the phone or on any device, never read aloud here,
+    is downloaded and extracted when picked; a cached downloaded copy stands
+    in for its server item so a book is listed once
+    (`PlayerNotificationService.inProgressEbooks`). Other formats appear only
+    when cached, since the native extraction handles epub only. The category
+    is shown even without audiobooks in progress; cache changes call
     `notifyChildrenChanged(CONTINUE_ROOT)`
   - `BrowseTree` no longer hides libraries without audio files when it is a
     book library with items (ebook-only libraries); cached ebooks carry the
@@ -485,10 +492,11 @@ The first slice of F1 is in the code (commit "Implement F1 slice…"):
     language) in `ereaderSettings`; the web fallback only supports the voice
     (a numeric index into `getSupportedVoices()`, resolved fresh), the engine
     choice is hidden
-  - Limitation: a cold start from Android Auto of a book never started from
-    the reader uses the last applied engine and the default voice (the
-    per-language voice lives in the WebView, the same limitation as
-    `ttsLanguageForBook`)
+  - A start from Android Auto (a book never started from the reader, or one
+    cached by it) uses the global engine, speed, voice for the language and
+    pages per skip from the ereader settings, read natively (see the read
+    aloud settings in the car below) — previously the last applied engine
+    and the default voice
 - [x] Reader/read aloud defaults and the language per book:
   - The global settings (`ereaderSettings`) live in the store module
     `store/ereader.js` and are saved through `@capacitor/preferences`
@@ -526,11 +534,50 @@ The first slice of F1 is in the code (commit "Implement F1 slice…"):
     load of the progress from the server.
   - Native safeguards against switching to English: `applyConfig()` after a
     failed `setLanguage` tries the language without a region and then a voice
-    of that language from `engine.voices`; a saved voice of a different
-    language is ignored (Android `applyConfig`, iOS `resolveVoice`),
+    of that language from `engine.voices` (counted as success only when the
+    engine accepts the voice — a listed but not installed voice is refused,
+    and the engine would keep speaking its own language); a saved voice of a
+    different language is ignored (Android `applyConfig`, iOS `resolveVoice`),
     languages are compared through `TTSPlaybackEngine.sameLanguage` (2- and
-    3-letter voice codes). `ttsLanguageForBook` normalises a language name
-    ("Czech") to a tag.
+    3-letter voice codes). A refused language is also written to the app
+    logs (`AbsLogger`), since without the reader open nobody sees the error
+    event. `TTSLanguage.forBookLanguage` (`media/TTSSettings.kt`) maps a
+    language a book or a setting names (code, tag or name such as "Czech")
+    onto the offered languages, the same way as `ttsLanguageForBookLanguage`.
+- [x] Read aloud settings in the car (the language the reader chose was not
+  respected: a book picked in Android Auto started in English although the
+  reader on the phone had switched it to Czech):
+  - The reader resolves the language in the WebView (the language saved for
+    the book, the language of the book, the global default) and sends the
+    result in the `TTSBook` payload; a book resumed in the car took the
+    language the cache held from the last `prepareBook` (a switch in the
+    reader mid-session only reaches the engine) or, for a natively extracted
+    book, the book metadata alone. The native side now resolves the same
+    order (`PlayerNotificationService.resolveTTSLanguage`, applied by
+    `applyTTSDefaults` for every start without an explicit position, i.e.
+    Android Auto and the steering wheel):
+    1. the language saved for the book on the server —
+       `ebookSettings.ttsLanguage` of the media progress (fork server), now
+       parsed into `MediaProgress.ebookSettings` and refreshed by
+       `refreshEbookProgress` before the resume (for a downloaded copy the
+       progress of the linked server item is fetched for this alone);
+    2. the language of the book — `TTSBook.bookLanguage`, sent by the reader
+       (library metadata, then the epub `dc:language` through the
+       `ttsEbookLanguage` hook) and set by the native extraction;
+    3. the global default — `TTSSettings` reads `ereaderSettings` from the
+       CapacitorStorage shared preferences the Preferences plugin writes;
+    4. the language kept in the cache.
+  - `TTSSettings` also carries the global speed, engine, voice per language
+    and pages per skip, applied by `TTSPlaybackEngine.applySettings` in one
+    go (one restart when playing, a new TextToSpeech instance when the engine
+    changed).
+  - Reader side: a native session of the open book is brought in line with
+    the reader's settings when the reader attaches to it and before a resume
+    (`ttsSyncNativeSettings` in the mixin, only what differs is sent). The
+    session may come from the car with other settings, and the settings sent
+    while the reader mounted are lost when the player service was not bound
+    yet — the bar showed CZ while the engine kept speaking English.
+  - **not yet verified on a device / the DHU**
 - [x] Position sync between the phone and the car (a book partly read on the
   phone → listening to the same book in the car):
   - The data for Android Auto (`serverUserMediaProgress`,

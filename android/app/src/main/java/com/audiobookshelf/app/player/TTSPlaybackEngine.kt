@@ -11,6 +11,7 @@ import androidx.media.AudioAttributesCompat
 import androidx.media.AudioFocusRequestCompat
 import androidx.media.AudioManagerCompat
 import com.audiobookshelf.app.data.TTSBook
+import com.audiobookshelf.app.plugins.AbsLogger
 import java.util.Locale
 
 /**
@@ -389,6 +390,30 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
     restartCurrentChunkIfPlaying()
   }
 
+  /**
+   * Several settings at once for a book started without the reader (Android
+   * Auto, see PlayerNotificationService.applyTTSDefaults): null keeps the
+   * current value, an engine change replaces the TextToSpeech instance. A
+   * running session restarts its current chunk once for all the changes.
+   */
+  fun applySettings(newLanguage: String?, newRate: Float?, newEnginePackage: String?, newVoiceName: String?, newPageStep: Int?) {
+    val wasPlaying = state == TTSState.PLAYING
+    newLanguage?.let { language = it }
+    newRate?.let { rate = it }
+    if (newEnginePackage != null && newEnginePackage != enginePackage) {
+      enginePackage = newEnginePackage
+      voiceName = "" // voices are engine-specific
+      shutdownTTSInstance()
+    }
+    newVoiceName?.let { voiceName = it }
+    newPageStep?.let { setPageStep(it, pageChars) }
+    Log.d(tag, "applySettings: language=$language rate=$rate engine=${enginePackage.ifEmpty { "default" }} voice=${voiceName.ifEmpty { "default" }} pageStep=$pageStep")
+    if (wasPlaying) {
+      // State stays PLAYING through the change; a replaced engine re-inits lazily
+      restartCurrentChunkIfPlaying()
+    }
+  }
+
   /** The engine cannot change on a live TextToSpeech instance - shutdown and lazily re-init */
   private fun reinitTTS() {
     val wasPlaying = state == TTSState.PLAYING
@@ -466,16 +491,20 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
       result = engine.setLanguage(Locale(locale.language))
     }
     if (isLanguageFailure(result)) {
-      // Engines that refuse setLanguage yet list a voice of the language speak with that voice
+      // Engines that refuse setLanguage yet list a voice of the language speak
+      // with that voice - when they accept it (a voice listed but not installed
+      // is refused too, and the engine would keep speaking its own language)
       val languageVoice = voices?.find { sameLanguage(it.locale, locale) }
-      if (languageVoice != null) {
+      if (languageVoice != null && engine.setVoice(languageVoice) == TextToSpeech.SUCCESS) {
         Log.w(tag, "Language $language refused by the TTS engine (result=$result), using voice ${languageVoice.name}")
-        engine.setVoice(languageVoice)
         result = TextToSpeech.LANG_AVAILABLE
       }
     }
     if (isLanguageFailure(result)) {
-      Log.w(tag, "Language $language not supported by the TTS engine (result=$result)")
+      // Logged through the app logs as well: without the reader open (Android
+      // Auto) the error event reaches nobody, and the symptom - English speech
+      // for a Czech book - looks like a wrong setting rather than a missing voice
+      AbsLogger.error(tag, "applyConfig: Language $language not supported by the TTS engine ${enginePackage.ifEmpty { "(default)" }} (result=$result), the engine keeps its own language")
       listener.onTTSError("Language $language is not supported")
     }
 
@@ -487,7 +516,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
         // A voice of another language would override the language just set
         // (a voice kept from a book in another language)
         !sameLanguage(voice.locale, locale) -> Log.w(tag, "Voice $voiceName is not a $language voice, using language default")
-        else -> engine.setVoice(voice)
+        engine.setVoice(voice) != TextToSpeech.SUCCESS -> Log.w(tag, "Voice $voiceName refused by the TTS engine, using language default")
       }
     }
   }
