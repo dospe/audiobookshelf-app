@@ -1,5 +1,6 @@
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
 import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
+import { ttsLanguageForBookLanguage } from '@/utils/ereaderSettings'
 
 /**
  * Read aloud (TTS) engine shared by the ebook readers, speaking with the
@@ -36,6 +37,11 @@ import { AbsTTSPlayer, isNativeTTSPlayerAvailable } from '@/plugins/capacitor/Ab
  *   ttsEstimatePageChars() -> Number (optional)
  *     Characters on one displayed page, used by the native player to skip
  *     by pages from the notification / lock screen / Android Auto.
+ *   ttsEbookLanguage() -> String|null (optional)
+ *     The language the ebook file declares (epub dc:language). With the
+ *     library metadata it gives the book's own read aloud language, sent
+ *     along so a resume without the reader (Android Auto) can resolve the
+ *     language the way the reader does.
  *
  * Skipping by pages (the read aloud bar rewind/forward buttons) uses:
  *
@@ -190,6 +196,7 @@ export default {
         title: mediaMetadata.title || '',
         author: mediaMetadata.authorName || '',
         language: this.ereaderSettings.ttsLanguage || 'en-US',
+        bookLanguage: ttsLanguageForBookLanguage(mediaMetadata.language) || ttsLanguageForBookLanguage(this.ttsEbookLanguage?.()) || null,
         rate: this.ereaderSettings.ttsRate || 1,
         ttsEngine: this.ereaderSettings.ttsEngine || '',
         voice: this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || '',
@@ -205,6 +212,39 @@ export default {
     ttsPageStepOf(settings) {
       const step = parseInt(settings?.ttsPageStep)
       return step > 0 ? step : 3
+    },
+    /**
+     * Bring a native session of this book in line with the reader's read
+     * aloud settings before it goes on. The session may have been started
+     * elsewhere with other settings (Android Auto, an earlier reader), and the
+     * settings sent while the reader mounted are lost when the player service
+     * was not bound yet - the bar would show CZ while the engine keeps
+     * speaking English. Only what differs is sent, so a matching session is
+     * not interrupted.
+     * @param {Object} state - getState() payload of the session (language, rate, engine, voice)
+     */
+    async ttsSyncNativeSettings(state) {
+      const settings = this.ereaderSettings
+      if (!state || !settings?.ttsLanguage) return
+      const engine = settings.ttsEngine || ''
+      const language = settings.ttsLanguage
+      const rate = Number(settings.ttsRate) || 1
+      const voice = settings.ttsVoices?.[language] || ''
+      const calls = []
+      // Same order as ttsHandleSettingsChange: the engine re-init clears the
+      // voice, setLanguage picks a default the voice then overrides
+      if (state.engine !== undefined && (state.engine || '') !== engine) calls.push(AbsTTSPlayer.setEngine({ engine }))
+      if (state.language !== language) calls.push(AbsTTSPlayer.setLanguage({ lang: language }))
+      // The native rate is a float - compare with a tolerance
+      if (Math.abs(Number(state.rate) - rate) > 0.001) calls.push(AbsTTSPlayer.setRate({ rate }))
+      if ((state.voice || '') !== voice) calls.push(AbsTTSPlayer.setVoice({ voice }))
+      if (calls.length) console.log(`[ttsPlayer] Syncing the native session to the reader settings (${language}, ${rate}×, voice: ${voice || 'default'}, engine: ${engine || 'default'})`)
+      calls.push(AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(settings), pageChars: this.ttsEstimatePageChars?.() || 0 }))
+      for (const call of calls) {
+        await call.catch((error) => {
+          console.error('[ttsPlayer] Failed to sync a native TTS setting', error)
+        })
+      }
     },
     /**
      * Rewind/forward by the configured number of pages: turn the pages in the
@@ -374,6 +414,8 @@ export default {
       if (this.ttsNativeStartPosition && this.ttsIsParagraphVisible?.({ location: state.location, paragraphIndex: state.paragraphIndex }) === false) {
         await this.ttsSeekToVisiblePage()
       }
+      // The session speaks with the settings shown in the bar, wherever it was started
+      await this.ttsSyncNativeSettings(state)
       AbsTTSPlayer.play({}).catch(() => {})
     },
     stopTTS() {
@@ -541,6 +583,9 @@ export default {
       await this.ttsRegisterNativeListeners()
       this.ttsState = state.state
       this.$emit('tts-state', state.state)
+      // A session started elsewhere (Android Auto) may speak with other
+      // settings than the reader shows - the reader's settings win
+      await this.ttsSyncNativeSettings(state)
     }
   },
   beforeDestroy() {

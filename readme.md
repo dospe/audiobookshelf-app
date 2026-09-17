@@ -34,9 +34,10 @@ The official app is on the [Google Play Store](https://play.google.com/store/app
 
 ### Ebooks in Android Auto
 
-- An **Ebooks** category with every book cached for read aloud, an **Ebooks** node in each book library (EPUBs are downloaded and extracted natively, no phone interaction needed), and in-progress ebooks in **Continue**.
+- An **Ebooks** category with every book cached for read aloud, an **Ebooks** node in each book library (EPUBs are downloaded and extracted natively, no phone interaction needed), and in-progress ebooks in **Continue** — including EPUBs you only read on the phone (or elsewhere) and never read aloud.
 - Selecting a book in the car resumes read aloud from the last saved position (the newer of server and local progress), and an empty "play" from the steering wheel resumes the most recent audiobook or ebook.
 - Progress is refreshed when the car connects, so what you read on the phone is where the car picks up.
+- The car speaks with the settings the reader would use: the read aloud language saved for the book, otherwise the book's own language, otherwise your default; speed, engine and voice come from the read aloud defaults.
 
 ### More ebook formats and reader settings
 

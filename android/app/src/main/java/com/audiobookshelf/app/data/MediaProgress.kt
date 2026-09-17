@@ -16,9 +16,18 @@ class MediaProgress(
   var ebookProgress:Double?, // 0 to 1
   var lastUpdate:Long,
   var startedAt:Long,
-  var finishedAt:Long?
+  var finishedAt:Long?,
+  // Per-book ereader settings the reader stores with the progress (fork
+  // server): the read aloud language of the book at the top level, the
+  // appearance per device under `devices`. Kept as sent - only ttsLanguage is
+  // read natively (see PlayerNotificationService.resolveTTSLanguage)
+  var ebookSettings:Map<String, Any?>? = null
 ) : MediaProgressWrapper(isFinished, currentTime, progress) {
 
   @get:JsonIgnore
   override val mediaItemId get() = if (episodeId.isNullOrEmpty()) libraryItemId else "$libraryItemId-$episodeId"
+
+  /** Read aloud language saved for the book by the reader, null when none */
+  @get:JsonIgnore
+  val ebookTtsLanguage:String? get() = ebookSettings?.get("ttsLanguage") as? String
 }

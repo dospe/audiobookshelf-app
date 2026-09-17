@@ -282,6 +282,10 @@ export default {
       }
       return { ebookFormat: 'epub', chapters }
     },
+    /** Native TTS hook: the language the epub declares (dc:language), null when none */
+    ttsEbookLanguage() {
+      return this.book?.packaging?.metadata?.language || null
+    },
     /** Native TTS hook: start at the chapter/paragraph of the visible page */
     ttsNativeStartPosition(book) {
       const location = this.rendition?.currentLocation()

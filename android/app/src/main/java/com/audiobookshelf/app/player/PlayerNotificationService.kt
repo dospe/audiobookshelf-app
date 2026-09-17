@@ -39,7 +39,9 @@ import com.audiobookshelf.app.managers.SleepTimerManager
 import com.audiobookshelf.app.media.EpubTextExtractor
 import com.audiobookshelf.app.media.MediaManager
 import com.audiobookshelf.app.media.MediaProgressSyncer
+import com.audiobookshelf.app.media.TTSLanguage
 import com.audiobookshelf.app.media.TTSProgressSyncer
+import com.audiobookshelf.app.media.TTSSettings
 import com.audiobookshelf.app.media.getUriToAbsIconDrawable
 import com.audiobookshelf.app.media.getUriToDrawable
 import com.audiobookshelf.app.plugins.AbsLogger
@@ -303,25 +305,32 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     // Picked in Android Auto: continue where reading last stopped - on this
-    // phone or on any other device. The engine position is not it: preparing a
-    // book resets it to the start, and the book may have been read further in
-    // the reader since this session was left behind
+    // phone or on any other device - with the settings the reader would use.
+    // The engine position is not it: preparing a book resets it to the start,
+    // and the book may have been read further in the reader since this
+    // session was left behind; nor is the language kept in the cache, which
+    // is the one the reader spoke with when it last prepared the book
     val book = engine.book ?: return
     refreshEbookProgress(book.libraryItemId) {
+      applyTTSDefaults(book, engine)
       savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
       startTTSPlayback(null, null)
     }
   }
 
   /**
-   * Pull the current reading position of a server item into the Android Auto
-   * progress cache before resuming it, so read aloud in the car continues where
-   * the phone reader left off instead of at the position cached when the browse
-   * tree was built. Continues with what is cached on any failure - a slightly
-   * old position still beats starting the book over. [cb] runs on the main thread.
+   * Pull the current progress of an item into the Android Auto progress cache
+   * before resuming it, so read aloud in the car continues where the phone
+   * reader left off instead of at the position cached when the browse tree was
+   * built, and speaks in the language the reader saved for the book. Fetched
+   * for a server item and for the server item a downloaded copy is linked to
+   * (its position stays the local one, only the settings are read from it).
+   * Continues with what is cached on any failure - a slightly old position
+   * still beats starting the book over. [cb] runs on the main thread.
    */
   private fun refreshEbookProgress(libraryItemId: String, cb: () -> Unit) {
-    if (libraryItemId.startsWith("local") ||
+    val serverLibraryItemId = serverLibraryItemIdFor(libraryItemId)
+    if (serverLibraryItemId == null ||
       DeviceManager.serverAddress.isEmpty() ||
       !DeviceManager.checkConnectivity(ctx)
     ) {
@@ -329,10 +338,70 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       return
     }
 
-    apiHandler.getMediaProgress(libraryItemId, null, DeviceManager.serverConnectionConfig) { mediaProgress ->
+    apiHandler.getMediaProgress(serverLibraryItemId, null, DeviceManager.serverConnectionConfig) { mediaProgress ->
       mediaProgress?.let { mediaManager.setServerMediaProgress(it) }
       Handler(Looper.getMainLooper()).post { cb() }
     }
+  }
+
+  /**
+   * The server item behind an item id: the id itself, or for a downloaded copy
+   * the item it is linked to on the current server. Null when there is none.
+   */
+  private fun serverLibraryItemIdFor(libraryItemId: String): String? {
+    if (!libraryItemId.startsWith("local")) return libraryItemId
+    val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItem(libraryItemId) ?: return null
+    if (localLibraryItem.serverConnectionConfigId != DeviceManager.serverConnectionConfigId) return null
+    return localLibraryItem.libraryItemId?.takeUnless { it.isEmpty() }
+  }
+
+  /**
+   * Read aloud settings for a book started without the reader (picked in
+   * Android Auto, resumed by the steering wheel). The reader applies the
+   * language of the book and the user's defaults in the WebView; the native
+   * side resolves the same: the language saved for the book on the server,
+   * else the language of the book, else the global default - and the global
+   * speed, engine, voice for the language and pages per skip from the
+   * ereader settings (TTSSettings). Without them the car spoke with whatever
+   * the engine or the cache last held, typically English.
+   */
+  private fun applyTTSDefaults(book: TTSBook, engine: TTSPlaybackEngine) {
+    val settings = TTSSettings.load(this)
+    val language = resolveTTSLanguage(book, settings)
+    book.language = language
+    engine.applySettings(
+      newLanguage = language,
+      newRate = settings.ttsRate,
+      newEnginePackage = settings.ttsEngine,
+      newVoiceName = settings.voiceFor(language),
+      newPageStep = settings.ttsPageStep
+    )
+    AbsLogger.info(tag, "applyTTSDefaults: Reading \"${book.title}\" aloud in $language (saved for the book: ${serverBookTtsLanguage(book.libraryItemId) ?: "-"}, book: ${book.bookLanguage ?: "-"}, default: ${settings.ttsLanguage ?: "-"})")
+  }
+
+  /**
+   * The read aloud language of a book, in the order the reader uses: the
+   * language saved for the book (a manual choice in the reader, stored with
+   * the progress on the server), the language of the book (library metadata,
+   * then the ebook file), the global default. The language the cache holds is
+   * the last resort - the reader chose it once, but the defaults may have
+   * changed since (Use for all books)
+   */
+  private fun resolveTTSLanguage(book: TTSBook, settings: TTSSettings): String {
+    return serverBookTtsLanguage(book.libraryItemId)
+      ?: TTSLanguage.forBookLanguage(book.bookLanguage)
+      ?: settings.ttsLanguage
+      ?: TTSLanguage.forBookLanguage(book.language)
+      ?: book.language.ifEmpty { TTSLanguage.DEFAULT }
+  }
+
+  /** Read aloud language the reader saved for the book on the server (ebookSettings.ttsLanguage), null when none */
+  private fun serverBookTtsLanguage(libraryItemId: String): String? {
+    val serverLibraryItemId = serverLibraryItemIdFor(libraryItemId) ?: return null
+    val progress = mediaManager.serverUserMediaProgress.find {
+      it.libraryItemId == serverLibraryItemId && it.episodeId.isNullOrEmpty()
+    }
+    return TTSLanguage.forBookLanguage(progress?.ebookTtsLanguage)
   }
 
   private fun startTTSPlayback(chapterIndex: Int?, paragraphIndex: Int?) {
@@ -401,21 +470,27 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         Thread {
           try {
             val extracted = EpubTextExtractor.extract(destFile)
+            // The language of the book: the library item metadata (editable on
+            // the server) first, then the epub dc:language - the order the
+            // reader uses. The spoken language, speed, engine and voice are
+            // resolved by applyTTSDefaults once the progress is fresh
+            val bookLanguage = TTSLanguage.forBookLanguage((libraryItem.media.metadata as? BookMetadata)?.language)
+              ?: TTSLanguage.forBookLanguage(extracted.language)
             val book = TTSBook(
               libraryItemId = libraryItemId,
               serverAddress = DeviceManager.serverAddress,
               // Item metadata over OPF metadata - matches what the app shows
               title = libraryItem.title,
               author = (libraryItem.media.metadata as? BookMetadata)?.authorName?.ifEmpty { null } ?: extracted.author,
-              language = ttsLanguageForBook(extracted.language, libraryItem),
+              language = bookLanguage ?: ttsEngine?.language ?: TTSLanguage.DEFAULT,
               rate = ttsEngine?.rate ?: 1f,
-              // Keep the last-applied engine; the per-language voice is a reader
-              // setting living in WebView localStorage, so the engine default is used
-              ttsEngine = ttsEngine?.enginePackage,
+              // null = keep the engine's current values until applyTTSDefaults runs
+              ttsEngine = null,
               voice = null,
               ebookFormat = "epub",
               chapters = extracted.chapters,
-              totalChars = extracted.chapters.sumOf { chapter -> chapter.paragraphs.sumOf { it.chars } }
+              totalChars = extracted.chapters.sumOf { chapter -> chapter.paragraphs.sumOf { it.chars } },
+              bookLanguage = bookLanguage
             )
             ttsBookCache.save(book) // still on the extraction thread - MB-sized JSON write
             Handler(Looper.getMainLooper()).post {
@@ -424,6 +499,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               val engine = getTTSEngine()
               engine.prepare(book)
               refreshEbookProgress(book.libraryItemId) {
+                applyTTSDefaults(book, engine)
                 savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
                 startTTSPlayback(null, null)
               }
@@ -436,36 +512,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           }
         }.start()
       }
-    }
-  }
-
-  /**
-   * TTS language for a natively extracted book: the library item metadata
-   * language (editable on the server), then the epub dc:language, then the
-   * current engine language - the same order the reader uses for the read
-   * aloud language of a book. The reader also applies the user's per-book
-   * and default language, but those live in the WebView - the book's own
-   * language is the best native guess.
-   */
-  private fun ttsLanguageForBook(epubLanguage: String?, libraryItem: LibraryItem): String {
-    val metadataLanguage = (libraryItem.media.metadata as? BookMetadata)?.language
-    val language = bookLanguageTag(metadataLanguage) ?: bookLanguageTag(epubLanguage)
-    return language ?: ttsEngine?.language ?: "en-US"
-  }
-
-  /**
-   * Language tag for a language a book declares: a tag ("cs-CZ", "en_GB"), an
-   * ISO code ("cs", "ces") or a language name ("Czech"). Null when unusable -
-   * a name the engine cannot resolve would make it refuse the language.
-   */
-  private fun bookLanguageTag(raw: String?): String? {
-    // Some books list several languages ("cs; en") - the first one is the book's
-    val value = raw?.trim()?.split(';', ',')?.firstOrNull()?.trim()?.takeUnless { it.isEmpty() } ?: return null
-    if (Regex("^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$").matches(value)) return value.replace('_', '-')
-    return when (value.lowercase()) {
-      "czech", "čeština", "cestina", "česky", "cesky" -> "cs-CZ"
-      "english", "angličtina", "anglictina" -> "en-US"
-      else -> null
     }
   }
 
@@ -568,24 +614,55 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       ?: if (saved.progress > 0.0) book.positionForProgress(saved.progress) else null
   }
 
-  /** True when the TTS cache holds a partially read book - shows the Continue category */
-  fun hasInProgressCachedEbooks(): Boolean {
+  /** An ebook the car can continue reading aloud, and when its position was last saved */
+  private data class EbookInProgress(val libraryItemId: String, val title: String, val author: String?, val lastUpdate: Long)
+
+  /**
+   * Partially read ebooks for the Continue list, most recent first: the books
+   * in the TTS cache and the epubs in progress on the server (read in the
+   * reader on this phone or on any device, never read aloud here - they are
+   * downloaded and extracted when picked). A cached downloaded copy stands in
+   * for its server item, so a book is listed once.
+   */
+  private fun inProgressEbooks(localProgressEntries: List<LocalMediaProgress>): List<EbookInProgress> {
+    val ebooks = mutableListOf<EbookInProgress>()
+    val listed = mutableSetOf<String>()
+
+    ttsBookCache.list().forEach { summary ->
+      val saved = savedEbookProgress(summary.libraryItemId, localProgressEntries) ?: return@forEach
+      if (saved.progress <= 0.0 || saved.progress >= 1.0) return@forEach
+      ebooks += EbookInProgress(summary.libraryItemId, summary.title, summary.author, saved.lastUpdate)
+      listed += summary.libraryItemId
+      if (summary.libraryItemId.startsWith("local")) {
+        DeviceManager.dbManager.getLocalLibraryItem(summary.libraryItemId)?.libraryItemId?.let { listed += it }
+      }
+    }
+
+    mediaManager.serverEbooksInProgress.forEach { itemInProgress ->
+      val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
+      if (libraryItem.id in listed) return@forEach
+      // The server lists it as in progress; a finished or reset position saved
+      // since (the progress cache is fresher than the list) drops it
+      val saved = savedEbookProgress(libraryItem.id, localProgressEntries)
+      if (saved != null && (saved.progress <= 0.0 || saved.progress >= 1.0)) return@forEach
+      ebooks += EbookInProgress(libraryItem.id, libraryItem.title, libraryItem.authorName, saved?.lastUpdate ?: itemInProgress.progressLastUpdate)
+      listed += libraryItem.id
+    }
+
+    return ebooks.sortedByDescending { it.lastUpdate }
+  }
+
+  /** True when there is a partially read ebook to continue - shows the Continue category */
+  fun hasInProgressEbooks(): Boolean {
     return mostRecentInProgressEbook() != null
   }
 
   /**
-   * Partially read cached ebook with the most recent position, and when it was
-   * saved - the read aloud counterpart of the most recent item in progress
+   * Partially read ebook with the most recent position - the read aloud
+   * counterpart of the most recent item in progress
    */
-  private fun mostRecentInProgressEbook(): Pair<String, Long>? {
-    val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
-    return ttsBookCache.list()
-      .mapNotNull { summary ->
-        val saved = savedEbookProgress(summary.libraryItemId, localProgressEntries) ?: return@mapNotNull null
-        if (saved.progress <= 0.0 || saved.progress >= 1.0) return@mapNotNull null
-        Pair(summary.libraryItemId, saved.lastUpdate)
-      }
-      .maxByOrNull { it.second }
+  private fun mostRecentInProgressEbook(): EbookInProgress? {
+    return inProgressEbooks(DeviceManager.dbManager.getAllLocalMediaProgress()).firstOrNull()
   }
 
   /**
@@ -602,10 +679,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     val mostRecentEbook = mostRecentInProgressEbook()
 
     if (mostRecentEbook != null &&
-      (mostRecentItem == null || mostRecentEbook.second > mostRecentItem.progressLastUpdate)
+      (mostRecentItem == null || mostRecentEbook.lastUpdate > mostRecentItem.progressLastUpdate)
     ) {
-      Log.d(tag, "playMostRecentItem: Reading aloud ${mostRecentEbook.first}")
-      playTTS(mostRecentEbook.first, null, null)
+      Log.d(tag, "playMostRecentItem: Reading aloud ${mostRecentEbook.libraryItemId}")
+      playTTS(mostRecentEbook.libraryItemId, null, null)
       return
     }
 
@@ -2007,18 +2084,17 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 )
       }
 
-      // Partially read ebooks from the TTS cache - continue reading aloud in
-      // the car; grouped under an Ebooks header after the audio items
+      // Partially read ebooks (TTS cache and the server's epubs in progress) -
+      // continue reading aloud in the car; grouped under an Ebooks header
+      // after the audio items
       val localProgressEntries = DeviceManager.dbManager.getAllLocalMediaProgress()
-      ttsBookCache.list().forEach { summary ->
-        val ebookProgress = savedEbookProgress(summary.libraryItemId, localProgressEntries)?.progress ?: 0.0
-        if (ebookProgress <= 0.0 || ebookProgress >= 1.0) return@forEach
+      inProgressEbooks(localProgressEntries).forEach { ebook ->
         localBrowseItems +=
                 buildEbookBrowseItem(
-                        summary.libraryItemId,
-                        summary.title,
-                        summary.author,
-                        serverCoverUri(summary.libraryItemId),
+                        ebook.libraryItemId,
+                        ebook.title,
+                        ebook.author,
+                        serverCoverUri(ebook.libraryItemId),
                         "Ebooks",
                         localProgressEntries
                 )
@@ -2040,7 +2116,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                           mediaManager.serverLibraries,
                           mediaManager.allLibraryPersonalizationsDone,
                           ttsBookCache.list(),
-                          hasInProgressCachedEbooks()
+                          hasInProgressEbooks()
                   )
           onBrowseTreeInitialized()
           val children =
@@ -2077,7 +2153,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                         mediaManager.serverLibraries,
                         mediaManager.allLibraryPersonalizationsDone,
                         ttsBookCache.list(),
-                        hasInProgressCachedEbooks()
+                        hasInProgressEbooks()
                 )
         onBrowseTreeInitialized()
         val children =
