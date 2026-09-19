@@ -95,8 +95,10 @@ class AbsTTSPlayer : Plugin() {
     val libraryItemId = call.getString("libraryItemId")
     val chapterIndex = if (call.data.has("chapterIndex")) call.getInt("chapterIndex") else null
     val paragraphIndex = if (call.data.has("paragraphIndex")) call.getInt("paragraphIndex") else null
+    // The reader resumes without the server check - it follows the server on its own
+    val skipRemoteCheck = call.getBoolean("skipRemoteCheck") ?: false
     mainHandler.post {
-      playerNotificationService.playTTS(libraryItemId, chapterIndex, paragraphIndex)
+      playerNotificationService.playTTS(libraryItemId, chapterIndex, paragraphIndex, skipRemoteCheck)
       call.resolve()
     }
   }

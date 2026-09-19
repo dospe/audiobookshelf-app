@@ -41,7 +41,9 @@ export default {
       default: () => {}
     },
     isLocal: Boolean,
-    keepProgress: Boolean
+    keepProgress: Boolean,
+    // The server copy of the progress could not be fetched when the book opened: server saves wait (see updateProgress)
+    progressStale: Boolean
   },
   data() {
     return {
@@ -52,7 +54,18 @@ export default {
       windowWidth: 0,
       windowHeight: 0,
       pdfDocInitParams: null,
-      isRefreshing: false
+      isRefreshing: false,
+      // The last position not sent to the server while progressStale
+      pendingServerProgress: null
+    }
+  },
+  watch: {
+    progressStale(stale) {
+      if (!stale && this.pendingServerProgress) {
+        const payload = this.pendingServerProgress
+        this.pendingServerProgress = null
+        this.sendServerProgress(payload)
+      }
     }
   },
   computed: {
@@ -243,10 +256,38 @@ export default {
 
       // Update server item
       if (this.serverLibraryItemId) {
-        this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
-          console.error('PdfReader.updateProgress failed:', error)
-        })
+        if (this.progressStale) {
+          // Kept back until the server answers or the grace period ends (see Reader.refreshItemProgress)
+          this.pendingServerProgress = payload
+          return
+        }
+        this.sendServerProgress(payload)
       }
+    },
+    sendServerProgress(payload) {
+      if (!this.serverLibraryItemId) return
+      this.$emit('progress-saved', payload)
+      this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+        console.error('PdfReader.updateProgress failed:', error)
+      })
+    },
+    /** A position turned to while the server progress was stale is not sent after all */
+    discardPendingProgress() {
+      this.pendingServerProgress = null
+    },
+    /**
+     * Turn to a page saved elsewhere without saving it back
+     * @param {string} ebookLocation - page number
+     * @returns {boolean} false when it is not a page of this document
+     */
+    goToLocation(ebookLocation) {
+      const pageNum = Number(ebookLocation)
+      if (!(pageNum >= 1) || pageNum > this.numPages) return false
+      this.page = pageNum
+      return true
+    },
+    isAtLocation(ebookLocation) {
+      return Number(ebookLocation) === this.page
     },
     async loadedEvt() {
       if (this.savedPage && this.savedPage > 0 && this.savedPage <= this.numPages) {

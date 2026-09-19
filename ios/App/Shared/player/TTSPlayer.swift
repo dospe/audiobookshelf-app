@@ -33,6 +33,8 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = TTSPlayer()
     static let maxChunkLength = 300
     static let charsPerSecond = 15.0 // rough speaking speed at 1x for time estimates
+    // A session paused for this long is checked against the server before it goes on (see resumeSession)
+    static let remoteCheckAfterPause: TimeInterval = 2 * 60
 
     weak var listener: TTSPlayerListener?
     let cache = TTSBookCache()
@@ -51,6 +53,11 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
     private(set) var pageChars = TTSBook.defaultPageChars
     // Position stays on the last paragraph when the book ends; this makes progress report 100%
     private(set) var endOfBookReached = false
+    // When the session was paused (seconds since 1970) and whether the position
+    // was moved since: a resume after a long pause asks the server for a position
+    // written elsewhere meanwhile, unless the user placed the session themselves
+    private(set) var pausedAt: TimeInterval = 0
+    private(set) var positionChangedSincePause = false
 
     private var chunks: [String] = []
     private var chunkIndex = 0
@@ -150,9 +157,13 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
      * another book is loaded from the cache and resumed from the saved reading
      * position unless the caller (the reader) passes an explicit position.
      */
-    func play(libraryItemId: String?, chapterIndex startChapterIndex: Int?, paragraphIndex startParagraphIndex: Int?) {
+    func play(libraryItemId: String?, chapterIndex startChapterIndex: Int?, paragraphIndex startParagraphIndex: Int?, skipRemoteCheck: Bool = false) {
         guard let libraryItemId = libraryItemId, !libraryItemId.isEmpty else {
-            play(startChapterIndex: startChapterIndex, startParagraphIndex: startParagraphIndex)
+            if startChapterIndex == nil {
+                resumeSession(skipRemoteCheck: skipRemoteCheck)
+            } else {
+                play(startChapterIndex: startChapterIndex, startParagraphIndex: startParagraphIndex)
+            }
             return
         }
         if book?.libraryItemId != libraryItemId {
@@ -167,9 +178,39 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
             return
         }
         guard let currentBook = book else { return }
-        resolveSavedPosition(for: currentBook) { [weak self] position in
+        resolveSavedProgress(for: currentBook) { [weak self] saved in
             guard let self = self, self.book?.libraryItemId == currentBook.libraryItemId else { return }
-            if let position = position {
+            if let position = self.savedPosition(in: currentBook, saved: saved) {
+                self.seekTo(chapterIndex: position.chapterIndex, paragraphIndex: position.paragraphIndex)
+            }
+            self.play(startChapterIndex: nil, startParagraphIndex: nil)
+        }
+    }
+
+    /**
+     * Resume the session (lock screen, headset, the reader's play button).
+     * After a longer pause the book may have been read further elsewhere - the
+     * tablet, the phone reader - so the saved position is fetched first and,
+     * when it was written after the pause and points elsewhere, the session
+     * continues from it. Skipped when the reader has placed the session itself
+     * (it follows the server on its own) or the position was moved while
+     * paused. A short pause resumes at once.
+     */
+    func resumeSession(skipRemoteCheck: Bool = false) {
+        guard let currentBook = book, state == .paused, !skipRemoteCheck, !positionChangedSincePause,
+              Date().timeIntervalSince1970 - pausedAt >= TTSPlayer.remoteCheckAfterPause else {
+            play(startChapterIndex: nil, startParagraphIndex: nil)
+            return
+        }
+        // The pause synced the position with the pause time (ms), so anything newer was written elsewhere
+        let pausedAtMs = pausedAt * 1000
+        resolveSavedProgress(for: currentBook) { [weak self] saved in
+            guard let self = self, self.book?.libraryItemId == currentBook.libraryItemId else { return }
+            if self.state == .paused, !self.positionChangedSincePause,
+               let saved = saved, saved.lastUpdate > pausedAtMs + 5000,
+               let position = self.savedPosition(in: currentBook, saved: saved),
+               position.chapterIndex != self.chapterIndex || position.paragraphIndex != self.paragraphIndex {
+                AbsLogger.info(message: "TTSPlayer: \"\(currentBook.title)\" was read further elsewhere since the pause - continuing from \(saved.location ?? "progress \(saved.progress)")")
                 self.seekTo(chapterIndex: position.chapterIndex, paragraphIndex: position.paragraphIndex)
             }
             self.play(startChapterIndex: nil, startParagraphIndex: nil)
@@ -207,6 +248,8 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
 
     func pause() {
         guard state == .playing else { return }
+        pausedAt = Date().timeIntervalSince1970
+        positionChangedSincePause = false
         interrupt()
         setState(.paused)
     }
@@ -224,6 +267,9 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
         chunks = []
         chunkIndex = 0
         endOfBookReached = false
+        if state == .paused {
+            positionChangedSincePause = true
+        }
         if state == .playing {
             interrupt()
             loadCurrentParagraph()
@@ -316,39 +362,61 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Saved reading position
 
-    /// Start position for a book resumed from the saved progress (local db and/or server), nil to start from the beginning
-    private func resolveSavedPosition(for currentBook: TTSBook, completion: @escaping ((chapterIndex: Int, paragraphIndex: Int)?) -> Void) {
-        if currentBook.libraryItemId.hasPrefix("local") {
-            let saved = Database.shared.getLocalMediaProgress(localMediaProgressId: currentBook.libraryItemId)
-            completion(savedPosition(in: currentBook, location: saved?.ebookLocation, progress: saved?.ebookProgress ?? 0))
-            return
-        }
+    private typealias SavedProgress = (location: String?, progress: Double, lastUpdate: Double)
 
-        // A server item can have the position in two places: the server (written
-        // by the reader on any device) and, when the book is downloaded, the local
-        // db - the most recently updated one wins. Realm objects stay on this thread.
-        let localEntry = Database.shared.getAllLocalMediaProgress().first { $0.libraryItemId == currentBook.libraryItemId && ($0.episodeId ?? "").isEmpty }
-        let localSaved: (location: String?, progress: Double, lastUpdate: Double)? = localEntry.map { ($0.ebookLocation, $0.ebookProgress ?? 0, $0.lastUpdate) }
-        guard Store.serverConfig != nil else {
-            completion(savedPosition(in: currentBook, location: localSaved?.location, progress: localSaved?.progress ?? 0))
+    /**
+     * The saved reading position of the book, wherever it was last written:
+     * the local db of a downloaded copy and the server (for a downloaded copy
+     * the server item it is linked to on the current server, so a book read
+     * further on another device is picked up here too) - the most recently
+     * updated one wins. Nil when the book was never opened. Realm objects
+     * stay on this thread.
+     */
+    private func resolveSavedProgress(for currentBook: TTSBook, completion: @escaping (SavedProgress?) -> Void) {
+        var candidates: [SavedProgress] = []
+        var serverLibraryItemId: String?
+        if currentBook.libraryItemId.hasPrefix("local") {
+            if let saved = Database.shared.getLocalMediaProgress(localMediaProgressId: currentBook.libraryItemId) {
+                candidates.append((saved.ebookLocation, saved.ebookProgress ?? 0, saved.lastUpdate))
+                if let linkedId = saved.libraryItemId, !linkedId.isEmpty, let serverConfig = Store.serverConfig, saved.serverConnectionConfigId == serverConfig.id {
+                    serverLibraryItemId = linkedId
+                }
+            }
+        } else {
+            if let localEntry = Database.shared.getAllLocalMediaProgress().first(where: { $0.libraryItemId == currentBook.libraryItemId && ($0.episodeId ?? "").isEmpty }) {
+                candidates.append((localEntry.ebookLocation, localEntry.ebookProgress ?? 0, localEntry.lastUpdate))
+            }
+            if Store.serverConfig != nil {
+                serverLibraryItemId = currentBook.libraryItemId
+            }
+        }
+        guard let serverItemId = serverLibraryItemId else {
+            completion(TTSPlayer.newestSavedProgress(candidates))
             return
         }
         Task {
-            let serverProgress = await ApiClient.getMediaProgress(libraryItemId: currentBook.libraryItemId, episodeId: nil)
-            let serverSaved: (location: String?, progress: Double, lastUpdate: Double)? = serverProgress.map { ($0.ebookLocation, $0.ebookProgress ?? 0, $0.lastUpdate) }
-            // Entries without any ebook position are audio-only progress for the same item
-            let candidates = [serverSaved, localSaved].compactMap { $0 }.filter { $0.progress > 0 || !($0.location ?? "").isEmpty }
-            let newest = candidates.max { $0.lastUpdate < $1.lastUpdate }
+            let serverProgress = await ApiClient.getMediaProgress(libraryItemId: serverItemId, episodeId: nil)
+            var all = candidates
+            if let serverProgress = serverProgress {
+                all.append((serverProgress.ebookLocation, serverProgress.ebookProgress ?? 0, serverProgress.lastUpdate))
+            }
             DispatchQueue.main.async {
-                completion(self.savedPosition(in: currentBook, location: newest?.location, progress: newest?.progress ?? 0))
+                completion(TTSPlayer.newestSavedProgress(all))
             }
         }
     }
 
-    private func savedPosition(in currentBook: TTSBook, location: String?, progress: Double) -> (chapterIndex: Int, paragraphIndex: Int)? {
-        if progress >= 1 { return nil } // finished - start over
-        if let position = currentBook.position(forLocation: location) { return position }
-        return progress > 0 ? currentBook.position(forProgress: progress) : nil
+    /// Entries without any ebook position are audio-only progress for the same item
+    private static func newestSavedProgress(_ candidates: [SavedProgress]) -> SavedProgress? {
+        return candidates.filter { $0.progress > 0 || !($0.location ?? "").isEmpty }.max { $0.lastUpdate < $1.lastUpdate }
+    }
+
+    /// Start position for a saved progress, nil to start from the beginning
+    private func savedPosition(in currentBook: TTSBook, saved: SavedProgress?) -> (chapterIndex: Int, paragraphIndex: Int)? {
+        guard let saved = saved else { return nil }
+        if saved.progress >= 1 { return nil } // finished - start over
+        if let position = currentBook.position(forLocation: saved.location) { return position }
+        return saved.progress > 0 ? currentBook.position(forProgress: saved.progress) : nil
     }
 
     // MARK: - Speaking
@@ -655,8 +723,9 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
             remoteCommandTokens.append((command: command, token: token))
         }
 
+        // Play after a longer pause checks the server for a position written elsewhere (resumeSession)
         register(center.playCommand) { [weak self] _ in
-            self?.play()
+            self?.resumeSession()
             return .success
         }
         register(center.pauseCommand) { [weak self] _ in
@@ -665,7 +734,7 @@ class TTSPlayer: NSObject, AVSpeechSynthesizerDelegate {
         }
         register(center.togglePlayPauseCommand) { [weak self] _ in
             guard let self = self else { return .commandFailed }
-            if self.state == .playing { self.pause() } else { self.play() }
+            if self.state == .playing { self.pause() } else { self.resumeSession() }
             return .success
         }
         register(center.stopCommand) { [weak self] _ in

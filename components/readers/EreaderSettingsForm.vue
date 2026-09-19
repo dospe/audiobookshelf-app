@@ -60,6 +60,15 @@
       </div>
       <ui-toggle-btns :value="settings.keepScreenAwake" name="keep-awake" :items="onOffToggleButtonItems" @input="set('keepScreenAwake', $event)" />
     </div>
+    <div class="flex items-center mb-6">
+      <div class="w-32">
+        <p class="text-sm">{{ $strings.LabelRemotePosition }}</p>
+      </div>
+      <div>
+        <ui-toggle-btns :value="settings.remotePosition || 'auto'" name="remote-position" :items="remotePositionItems" @input="set('remotePosition', $event)" />
+        <p class="text-xs text-fg-muted mt-1">{{ $strings.MessageRemotePositionHelp }}</p>
+      </div>
+    </div>
     <template v-if="ttsAvailable">
       <div class="flex items-center mb-6">
         <div class="w-32">
@@ -131,6 +140,13 @@ export default {
       return [
         { text: this.$strings.LabelLeft, value: 'left' },
         { text: this.$strings.LabelRight, value: 'right' }
+      ]
+    },
+    remotePositionItems() {
+      return [
+        { text: this.$strings.LabelRemotePositionAuto, value: 'auto' },
+        { text: this.$strings.LabelRemotePositionAsk, value: 'ask' },
+        { text: this.$strings.LabelOff, value: 'off' }
       ]
     },
     spreadItems() {

@@ -90,25 +90,54 @@ export default {
   },
   methods: {
     // Readers with their own settings handling (epub) override this and
-    // call ttsHandleSettingsChange themselves before storing the settings
+    // call ttsHandleSettingsChange themselves around storing the settings
     updateSettings(settings) {
       this.ttsHandleSettingsChange(settings)
       this.ereaderSettings = settings
     },
-    ttsHandleSettingsChange(newSettings) {
-      const langChanged = newSettings.ttsLanguage !== this.ereaderSettings.ttsLanguage
-      const rateChanged = newSettings.ttsRate !== this.ereaderSettings.ttsRate
-      const engineChanged = (newSettings.ttsEngine || '') !== (this.ereaderSettings.ttsEngine || '')
+    /**
+     * Characters on the displayed page from the reader hook, 0 when the
+     * reader cannot tell yet. The hook reads the rendered layout, which does
+     * not exist before the book is displayed (epub.js throws on
+     * currentLocation() before the rendition started), and it is asked while
+     * the settings are applied - a failure here must never abort the caller.
+     */
+    ttsPageCharsEstimate() {
+      try {
+        return this.ttsEstimatePageChars?.() || 0
+      } catch (error) {
+        console.warn('[ttsPlayer] Page size not known yet', error?.message || error)
+        return 0
+      }
+    },
+    /**
+     * Push changed read aloud settings to the engine. Never throws: the
+     * readers apply the appearance in the same call and a failure here used
+     * to leave the book at the default font size until the next change.
+     * @param {Object} newSettings
+     * @param {Object} [oldSettings] - the settings before the change, the stored ones by default
+     */
+    ttsHandleSettingsChange(newSettings, oldSettings = this.ereaderSettings) {
+      try {
+        this.ttsApplySettingsChange(newSettings, oldSettings || {})
+      } catch (error) {
+        console.error('[ttsPlayer] Failed to apply the read aloud settings', error)
+      }
+    },
+    ttsApplySettingsChange(newSettings, oldSettings) {
+      const langChanged = newSettings.ttsLanguage !== oldSettings.ttsLanguage
+      const rateChanged = newSettings.ttsRate !== oldSettings.ttsRate
+      const engineChanged = (newSettings.ttsEngine || '') !== (oldSettings.ttsEngine || '')
       const newVoice = newSettings.ttsVoices?.[newSettings.ttsLanguage] || ''
-      const oldVoice = this.ereaderSettings.ttsVoices?.[this.ereaderSettings.ttsLanguage] || ''
+      const oldVoice = oldSettings.ttsVoices?.[oldSettings.ttsLanguage] || ''
       // A language or engine switch also switches the effective voice
       const voiceChanged = newVoice !== oldVoice || langChanged || engineChanged
-      const pageStepChanged = this.ttsPageStepOf(newSettings) !== this.ttsPageStepOf(this.ereaderSettings)
+      const pageStepChanged = this.ttsPageStepOf(newSettings) !== this.ttsPageStepOf(oldSettings)
       if (!langChanged && !rateChanged && !engineChanged && !voiceChanged && !pageStepChanged) return
 
       if (this.ttsUseNative()) {
         if (pageStepChanged) {
-          AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(newSettings), pageChars: this.ttsEstimatePageChars?.() || 0 }).catch(() => {})
+          AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(newSettings), pageChars: this.ttsPageCharsEstimate() }).catch(() => {})
         }
         if (!langChanged && !rateChanged && !engineChanged && !voiceChanged) return
         // Order matters: the engine re-init clears the voice, setLanguage picks
@@ -205,7 +234,7 @@ export default {
         totalChars,
         // Page skips from the media session (notification, Android Auto)
         pageStep: this.ttsPageStepOf(this.ereaderSettings),
-        pageChars: this.ttsEstimatePageChars?.() || 0
+        pageChars: this.ttsPageCharsEstimate()
       }
     },
     /** @returns {number} pages per rewind/forward step from the settings */
@@ -239,7 +268,7 @@ export default {
       if (Math.abs(Number(state.rate) - rate) > 0.001) calls.push(AbsTTSPlayer.setRate({ rate }))
       if ((state.voice || '') !== voice) calls.push(AbsTTSPlayer.setVoice({ voice }))
       if (calls.length) console.log(`[ttsPlayer] Syncing the native session to the reader settings (${language}, ${rate}×, voice: ${voice || 'default'}, engine: ${engine || 'default'})`)
-      calls.push(AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(settings), pageChars: this.ttsEstimatePageChars?.() || 0 }))
+      calls.push(AbsTTSPlayer.setPageStep({ pageStep: this.ttsPageStepOf(settings), pageChars: this.ttsPageCharsEstimate() }))
       for (const call of calls) {
         await call.catch((error) => {
           console.error('[ttsPlayer] Failed to sync a native TTS setting', error)
@@ -416,7 +445,9 @@ export default {
       }
       // The session speaks with the settings shown in the bar, wherever it was started
       await this.ttsSyncNativeSettings(state)
-      AbsTTSPlayer.play({}).catch(() => {})
+      // The reader follows a position saved elsewhere on its own (Reader.checkRemotePosition),
+      // so the native resume does not check the server again after a long pause
+      AbsTTSPlayer.play({ skipRemoteCheck: true }).catch(() => {})
     },
     stopTTS() {
       const wasActive = this.ttsState !== 'stopped'

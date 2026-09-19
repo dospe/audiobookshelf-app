@@ -41,7 +41,9 @@ export default {
     isLocal: Boolean,
     keepProgress: Boolean,
     showingToolbar: Boolean,
-    ebookFormat: String
+    ebookFormat: String,
+    // The server copy of the progress could not be fetched when the book opened: server saves wait (see updateProgress)
+    progressStale: Boolean
   },
   data() {
     return {
@@ -54,7 +56,18 @@ export default {
       usedFallbackEncoding: false,
       parsedEncoding: '',
       scrollTimeout: null,
-      lastSavedLocation: null
+      lastSavedLocation: null,
+      // The last position not sent to the server while progressStale
+      pendingServerProgress: null
+    }
+  },
+  watch: {
+    progressStale(stale) {
+      if (!stale && this.pendingServerProgress) {
+        const payload = this.pendingServerProgress
+        this.pendingServerProgress = null
+        this.sendServerProgress(payload)
+      }
     }
   },
   computed: {
@@ -258,10 +271,43 @@ export default {
 
       // Update server item
       if (this.serverLibraryItemId) {
-        this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
-          console.error('DocumentReader.updateProgress failed:', error)
-        })
+        if (this.progressStale) {
+          // Kept back until the server answers or the grace period ends (see Reader.refreshItemProgress)
+          this.pendingServerProgress = payload
+          return
+        }
+        this.sendServerProgress(payload)
       }
+    },
+    sendServerProgress(payload) {
+      if (!this.serverLibraryItemId) return
+      this.$emit('progress-saved', payload)
+      this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+        console.error('DocumentReader.updateProgress failed:', error)
+      })
+    },
+    /** A position scrolled to while the server progress was stale is not sent after all */
+    discardPendingProgress() {
+      this.pendingServerProgress = null
+    },
+    /**
+     * Scroll to a paragraph saved elsewhere without saving it back
+     * @param {string} ebookLocation - paragraph index
+     * @returns {boolean} false when it is not a paragraph of this document
+     */
+    goToLocation(ebookLocation) {
+      const index = Number(ebookLocation)
+      if (!(index >= 0) || index >= this.blocks.length) return false
+      // The scroll handler saves after a second - the position it lands on is the same one
+      clearTimeout(this.scrollTimeout)
+      this.scrollToBlock(index)
+      this.lastSavedLocation = `${index}:${this.isAtEnd() ? 1 : Math.max(0, Math.min(1, index / this.blocks.length))}`
+      return true
+    },
+    isAtLocation(ebookLocation) {
+      const index = Number(ebookLocation)
+      const el = this.blocks[index]
+      return !!el && this.ttsIsParagraphVisible({ ref: el })
     },
     buildChapters() {
       const chapters = []

@@ -107,8 +107,10 @@ public class AbsTTSPlayer: CAPPlugin, CAPBridgedPlugin, TTSPlayerListener {
         let libraryItemId = call.getString("libraryItemId")
         let chapterIndex = call.getInt("chapterIndex")
         let paragraphIndex = call.getInt("paragraphIndex")
+        // The reader resumes without the server check - it follows the server on its own
+        let skipRemoteCheck = call.getBool("skipRemoteCheck") ?? false
         DispatchQueue.main.async {
-            self.player.play(libraryItemId: libraryItemId, chapterIndex: chapterIndex, paragraphIndex: paragraphIndex)
+            self.player.play(libraryItemId: libraryItemId, chapterIndex: chapterIndex, paragraphIndex: paragraphIndex, skipRemoteCheck: skipRemoteCheck)
             call.resolve()
         }
     }
