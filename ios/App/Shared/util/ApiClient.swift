@@ -558,6 +558,20 @@ class ApiClient {
                         if let localMediaProgress = localMediaProgress?.thaw() {
                             try localMediaProgress.updateFromServerMediaProgress(mediaProgress)
                         }
+                    } else if let localMediaProgress = localMediaProgress, localMediaProgress.lastUpdate > mediaProgress.lastUpdate,
+                              let localLocation = localMediaProgress.ebookLocation, !localLocation.isEmpty, localLocation != mediaProgress.ebookLocation {
+                        // A reading position saved on this device the server has not seen (the
+                        // reader or read aloud while offline, a failed save) - sent the way
+                        // Android does, so the other devices continue from it
+                        AbsLogger.info(message: "syncLocalSessionsWithServer: Local ebook progress for \(localMediaProgress.id) is more recent than the server progress - sending it (\(mediaProgress.ebookProgress ?? 0) -> \(localMediaProgress.ebookProgress ?? 0))")
+                        let payload = TTSEbookProgressPayload(ebookLocation: localLocation, ebookProgress: localMediaProgress.ebookProgress ?? 0, lastUpdate: localMediaProgress.lastUpdate)
+                        patchResourceWithTokenRefresh(endpoint: "api/me/progress/\(mediaProgress.libraryItemId)", parameters: payload) { success in
+                            if success {
+                                AbsLogger.info(message: "syncLocalSessionsWithServer: Sent the local ebook progress of \(mediaProgress.libraryItemId) to the server")
+                            } else {
+                                AbsLogger.error(message: "syncLocalSessionsWithServer: Failed to send the local ebook progress of \(mediaProgress.libraryItemId)")
+                            }
+                        }
                     } else if (localMediaProgress != nil) {
                         AbsLogger.info(message: "syncLocalSessionsWithServer: Local progress for \(localMediaProgress!.id) is more recent then server progress")
                     }

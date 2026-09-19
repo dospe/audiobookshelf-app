@@ -23,7 +23,9 @@ export default {
       default: () => {}
     },
     isLocal: Boolean,
-    keepProgress: Boolean
+    keepProgress: Boolean,
+    // The server copy of the progress could not be fetched when the book opened: server saves wait (see updateProgress)
+    progressStale: Boolean
   },
   data() {
     return {
@@ -37,6 +39,10 @@ export default {
       currentLocationCfi: null,
       inittingDisplay: true,
       isRefreshingUI: false,
+      // The last position not sent to the server while progressStale
+      pendingServerProgress: null,
+      // Set by goToLocation: the relocation it causes is not saved
+      suppressRelocationSave: false,
       ttsSectionIndex: 0,
       ereaderSettings: {
         theme: 'dark',
@@ -52,6 +58,14 @@ export default {
   watch: {
     isPlayerOpen() {
       this.refreshUI()
+    },
+    progressStale(stale) {
+      // The server can be written to again: the last position turned to meanwhile goes out
+      if (!stale && this.pendingServerProgress) {
+        const payload = this.pendingServerProgress
+        this.pendingServerProgress = null
+        this.sendServerProgress(payload)
+      }
     }
   },
   computed: {
@@ -142,35 +156,109 @@ export default {
     }
   },
   methods: {
+    /**
+     * Apply the reader settings. The appearance goes to epub.js first: the
+     * overrides are kept by the rendition and applied to every section it
+     * renders, so they can be set before the book is displayed (the settings
+     * arrive when the reader mounts, well before the first render). The read
+     * aloud sync comes last and never throws, so it cannot leave the book at
+     * the default font size as it once did.
+     */
     updateSettings(settings) {
-      this.ttsHandleSettingsChange(settings)
+      const previousSettings = this.ereaderSettings
       this.ereaderSettings = settings
 
-      if (!this.rendition) return
+      if (this.rendition) {
+        this.applyTheme()
 
-      this.applyTheme()
+        const fontScale = settings.fontScale || 100
+        this.rendition.themes.fontSize(`${fontScale}%`)
+        this.rendition.themes.font(settings.font)
+        this.rendition.spread(settings.spread || 'auto')
+      }
 
-      const fontScale = settings.fontScale || 100
-      this.rendition.themes.fontSize(`${fontScale}%`)
-      this.rendition.themes.font(settings.font)
-      this.rendition.spread(settings.spread || 'auto')
+      this.ttsHandleSettingsChange(settings, previousSettings)
+    },
+    /**
+     * Location of the displayed page, null while nothing is displayed yet.
+     * epub.js throws on currentLocation() until the rendition has started
+     * (its view manager exists only after the book opened).
+     * @returns {Object|null}
+     */
+    displayedLocation() {
+      if (!this.rendition?.manager) return null
+      try {
+        return this.rendition.currentLocation() || null
+      } catch (error) {
+        return null
+      }
     },
     goToChapter(href) {
       return this.rendition?.display(href)
+    },
+    /**
+     * Turn to a position saved elsewhere (another device, read aloud in the
+     * car). The relocation it causes is not saved: the position came from the
+     * server, and saving the start of the page it lands on here - a different
+     * cfi with a different font size - would move the other device in turn.
+     * @param {string} ebookLocation - cfi or spine href, may be empty
+     * @param {number} ebookProgress - ratio of the whole book, 0 when unknown
+     * @returns {Promise<boolean>} false when the position cannot be resolved
+     */
+    async goToLocation(ebookLocation, ebookProgress) {
+      if (!this.rendition || !this.book) return false
+      let target = this.resolveDisplayTarget(ebookLocation || null, Number(ebookProgress) || 0)
+      if (!target && Number(ebookProgress) > 0 && !this.book.locations.length()) {
+        await this.generateLocations()
+        target = this.resolveDisplayTarget(ebookLocation || null, Number(ebookProgress) || 0)
+      }
+      if (!target) return false
+      this.suppressRelocationSave = true
+      this.currentLocationCfi = target
+      try {
+        await this.rendition.display(target)
+      } catch (error) {
+        console.error(`[EpubReader] Failed to display ${target}`, error)
+        this.suppressRelocationSave = false
+        return false
+      }
+      return true
+    },
+    /**
+     * Whether a saved position lies on the displayed page
+     * @param {string} ebookLocation
+     * @param {number} ebookProgress
+     * @returns {boolean}
+     */
+    isAtLocation(ebookLocation, ebookProgress) {
+      const location = this.displayedLocation()
+      if (!location?.start?.cfi || !location?.end?.cfi) return false
+      const target = this.resolveDisplayTarget(ebookLocation || null, Number(ebookProgress) || 0)
+      if (!target || !target.startsWith('epubcfi')) return false
+      try {
+        const cfiCompare = new EpubCFI()
+        return cfiCompare.compare(target, location.start.cfi) >= 0 && cfiCompare.compare(target, location.end.cfi) < 0
+      } catch (error) {
+        return false
+      }
+    },
+    /** A position turned to while the server progress was stale is not sent after all (the server had a newer one) */
+    discardPendingProgress() {
+      this.pendingServerProgress = null
     },
     /**
      * TTS hook: paragraphs of the section at the current reading location.
      * Paragraph `ref` is the epub cfi of the element, used to follow along.
      */
     ttsCollectParagraphs() {
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       if (!location?.start) return []
       this.ttsSectionIndex = location.start.index
       return this.ttsCollectSectionParagraphs()
     },
     /** TTS hook: start from the first paragraph on the currently visible page */
     ttsStartIndex(paragraphs) {
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       if (!location?.start?.cfi) return 0
       const cfiCompare = new EpubCFI()
       const startIndex = paragraphs.findIndex((p) => {
@@ -203,7 +291,7 @@ export default {
     ttsFollowParagraph(paragraph) {
       const cfi = paragraph.ref
       if (!cfi) return
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       if (!location?.start?.cfi || !location?.end?.cfi) return
       try {
         const cfiCompare = new EpubCFI()
@@ -288,7 +376,7 @@ export default {
     },
     /** Native TTS hook: start at the chapter/paragraph of the visible page */
     ttsNativeStartPosition(book) {
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       const currentHref = this.book?.spine?.get(location?.start?.index)?.href
       const chapterIndex = book.chapters.findIndex((c) => c.startLocation === currentHref)
       if (chapterIndex < 0) return { chapterIndex: 0, paragraphIndex: 0 }
@@ -311,7 +399,7 @@ export default {
     /** TTS hook: whether the paragraph (an epub cfi) is on the visible page, null while nothing is displayed */
     ttsIsParagraphVisible(paragraph) {
       const cfi = paragraph.ref || paragraph.location
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       if (!cfi || !location?.start?.cfi || !location?.end?.cfi) return null
       try {
         const cfiCompare = new EpubCFI()
@@ -322,10 +410,13 @@ export default {
     },
     /**
      * TTS hook: characters on the visible page, from the generated cfi
-     * locations (100 characters each). 0 when the locations are not ready.
+     * locations (100 characters each). 0 when the locations are not ready or
+     * nothing is displayed yet (the settings are applied before the first
+     * render - asking epub.js for the location then used to throw and abort
+     * the appearance settings with it).
      */
     ttsEstimatePageChars() {
-      const location = this.rendition?.currentLocation()
+      const location = this.displayedLocation()
       const startLocation = location?.start?.location
       const endLocation = location?.end?.location
       if (!this.totalLocations || !(startLocation >= 0) || !(endLocation >= startLocation)) return 0
@@ -373,10 +464,22 @@ export default {
 
       // Update server item
       if (this.serverLibraryItemId) {
-        this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
-          console.error('EpubReader.updateProgress failed:', error)
-        })
+        if (this.progressStale) {
+          // The server may hold a position another device wrote after the copy
+          // this book opened from - kept back until the server answers or the
+          // grace period ends (see Reader.refreshItemProgress)
+          this.pendingServerProgress = payload
+          return
+        }
+        this.sendServerProgress(payload)
       }
+    },
+    sendServerProgress(payload) {
+      if (!this.serverLibraryItemId) return
+      this.$emit('progress-saved', payload)
+      this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+        console.error('EpubReader.updateProgress failed:', error)
+      })
     },
     getAllEbookLocationData() {
       const locations = []
@@ -469,7 +572,7 @@ export default {
         .generate(100)
         .then(() => {
           this.totalLocations = this.book.locations.length()
-          this.currentLocationNum = this.rendition.currentLocation()?.start?.location || 0
+          this.currentLocationNum = this.displayedLocation()?.start?.location || 0
           this.checkSaveLocations(this.book.locations.save())
         })
         .catch((error) => {
@@ -578,6 +681,15 @@ export default {
 
       if (this.currentLocationCfi === location.start.cfi) {
         console.log(`[EpubReader] location already saved`, location.start.cfi)
+        return
+      }
+
+      if (this.suppressRelocationSave) {
+        // Landed on a position from the server (goToLocation) - shown, not saved back
+        console.log(`[EpubReader] Displayed the position saved elsewhere ${location.start.cfi}`)
+        this.suppressRelocationSave = false
+        this.currentLocationCfi = location.start.cfi
+        if (location.end.percentage) this.progress = Math.round(location.end.percentage * 100)
         return
       }
 

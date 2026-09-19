@@ -34,8 +34,13 @@ export const DEFAULT_EREADER_SETTINGS = Object.freeze({
   ttsVoices: {},
   // Read aloud bar: playback controls side ('left' | 'right') and pages per rewind/forward step
   ttsControlsSide: 'right',
-  ttsPageStep: 3
+  ttsPageStep: 3,
+  // A newer reading position saved by another device while the reader is
+  // open: 'auto' turns to it, 'ask' offers it, 'off' ignores it
+  remotePosition: 'auto'
 })
+
+export const REMOTE_POSITION_MODES = Object.freeze(['auto', 'ask', 'off'])
 
 const NUMERIC_KEYS = ['fontScale', 'lineSpacing', 'textStroke', 'ttsRate', 'ttsPageStep']
 
@@ -93,6 +98,7 @@ export function normalizeEreaderSettings(stored) {
   if (!isTtsLanguage(settings.ttsLanguage)) {
     settings.ttsLanguage = ttsLanguageForBookLanguage(settings.ttsLanguage) || defaultTtsLanguage()
   }
+  if (!REMOTE_POSITION_MODES.includes(settings.remotePosition)) settings.remotePosition = DEFAULT_EREADER_SETTINGS.remotePosition
   settings.ttsVoices = stored.ttsVoices && typeof stored.ttsVoices === 'object' ? { ...stored.ttsVoices } : {}
   return settings
 }
@@ -153,7 +159,8 @@ export function bookSettingsForDevice(stored, deviceId) {
 /**
  * The stored per-book settings with the override of a device replaced. The
  * entries of the other devices and any top-level appearance of older clients
- * are kept.
+ * are kept. This is what an older server, which replaces the whole object,
+ * is sent (see serverMergesBookSettings).
  * @param {Object|null} stored - the settings as stored
  * @param {Object|null} override - the per-book override of the device (its diff from the book defaults)
  * @param {string} deviceId
@@ -173,5 +180,81 @@ export function withDeviceBookSettings(stored, override, deviceId) {
   if (Object.keys(devices).length) result.devices = devices
   else delete result.devices
 
+  return Object.keys(result).length ? result : null
+}
+
+/**
+ * Whether the server merges an ebookSettings update into the stored settings
+ * (fork 2.36.0-dospe.4 and later): a key or a device entry is set by a value
+ * and removed by null, what is left out stays. Older servers, upstream
+ * included, replace the whole object.
+ * @param {string} serverVersion - e.g. "2.36.0-dospe.4"
+ * @returns {boolean}
+ */
+export function serverMergesBookSettings(serverVersion) {
+  const match = /^(\d+)\.(\d+)\.(\d+)-dospe\.(\d+)/.exec(String(serverVersion || '').trim())
+  if (!match) return false
+  const [major, minor, patch, fork] = match.slice(1).map(Number)
+  const base = major * 1000000 + minor * 1000 + patch
+  const mergeBase = 2 * 1000000 + 36 * 1000 + 0
+  return base > mergeBase || (base === mergeBase && fork >= 4)
+}
+
+/**
+ * The update a device sends for a book to a merging server: its own entry of
+ * `devices` (the complete appearance override, null when there is none) and
+ * the shared keys of the book only where they differ from what is stored -
+ * a device that merely uses the language another device saved does not
+ * touch it. An empty shared value removes the key.
+ * @param {Object|null} stored - the settings as stored (all devices)
+ * @param {Object|null} override - the per-book override of the device (its diff from the book defaults)
+ * @param {Object} effective - the settings in use for the book on this device
+ * @param {string} deviceId
+ * @returns {Object} the update to send
+ */
+export function deviceBookSettingsUpdate(stored, override, effective, deviceId) {
+  const update = {}
+  for (const key of BOOK_SHARED_SETTING_KEYS) {
+    const storedValue = isObject(stored) && stored[key] !== undefined && stored[key] !== null && stored[key] !== '' ? stored[key] : null
+    const value = effective?.[key] !== undefined && effective?.[key] !== null && effective?.[key] !== '' ? effective[key] : null
+    if (value !== storedValue) update[key] = value
+  }
+  if (deviceId) {
+    const deviceSettings = pickSettings(override, BOOK_DEVICE_SETTING_KEYS)
+    update.devices = { [deviceId]: Object.keys(deviceSettings).length ? deviceSettings : null }
+  }
+  return update
+}
+
+/**
+ * The stored per-book settings with an update applied the way the server
+ * merges it (see deviceBookSettingsUpdate): a shared key is set by a value
+ * and removed by null, an entry of `devices` replaced by an object and
+ * removed by null, everything else stays.
+ * @param {Object|null} stored
+ * @param {Object|null} update
+ * @returns {Object|null} the merged settings, null when nothing is left
+ */
+export function applyBookSettingsUpdate(stored, update) {
+  if (update === null) return null
+  const result = isObject(stored) ? { ...stored } : {}
+  if (!isObject(update)) return Object.keys(result).length ? result : null
+  for (const key of BOOK_SETTING_KEYS) {
+    if (update[key] === undefined) continue
+    if (update[key] === null) delete result[key]
+    else result[key] = update[key]
+  }
+  const devices = isObject(result.devices) ? { ...result.devices } : {}
+  if (isObject(update.devices)) {
+    for (const deviceId of Object.keys(update.devices)) {
+      const entry = update.devices[deviceId]
+      if (entry === undefined) continue
+      const deviceSettings = pickSettings(entry, BOOK_DEVICE_SETTING_KEYS)
+      if (Object.keys(deviceSettings).length) devices[deviceId] = deviceSettings
+      else delete devices[deviceId]
+    }
+  }
+  if (Object.keys(devices).length) result.devices = devices
+  else delete result.devices
   return Object.keys(result).length ? result : null
 }

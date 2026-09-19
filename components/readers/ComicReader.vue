@@ -50,10 +50,14 @@ export default {
     },
     isLocal: Boolean,
     keepProgress: Boolean,
-    showingToolbar: Boolean
+    showingToolbar: Boolean,
+    // The server copy of the progress could not be fetched when the book opened: server saves wait (see updateProgress)
+    progressStale: Boolean
   },
   data() {
     return {
+      // The last position not sent to the server while progressStale
+      pendingServerProgress: null,
       loading: false,
       pages: null,
       filesObject: null,
@@ -69,6 +73,13 @@ export default {
     }
   },
   watch: {
+    progressStale(stale) {
+      if (!stale && this.pendingServerProgress) {
+        const payload = this.pendingServerProgress
+        this.pendingServerProgress = null
+        this.sendServerProgress(payload)
+      }
+    },
     url: {
       immediate: true,
       handler() {
@@ -181,10 +192,40 @@ export default {
 
       // Update server item
       if (this.serverLibraryItemId) {
-        this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
-          console.error('ComicReader.updateProgress failed:', error)
-        })
+        if (this.progressStale) {
+          // Kept back until the server answers or the grace period ends (see Reader.refreshItemProgress)
+          this.pendingServerProgress = payload
+          return
+        }
+        this.sendServerProgress(payload)
       }
+    },
+    sendServerProgress(payload) {
+      if (!this.serverLibraryItemId) return
+      this.$emit('progress-saved', payload)
+      this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+        console.error('ComicReader.updateProgress failed:', error)
+      })
+    },
+    /** A page turned to while the server progress was stale is not sent after all */
+    discardPendingProgress() {
+      this.pendingServerProgress = null
+    },
+    /**
+     * Turn to a page saved elsewhere without saving it back
+     * @param {string} ebookLocation - page number
+     * @returns {Promise<boolean>} false when it is not a page of this comic
+     */
+    async goToLocation(ebookLocation) {
+      const pageNum = Number(ebookLocation)
+      if (!(pageNum >= 1) || pageNum > this.numPages || !this.pages) return false
+      this.showPageMenu = false
+      this.page = pageNum
+      await this.extractFile(this.pages[pageNum - 1])
+      return true
+    },
+    isAtLocation(ebookLocation) {
+      return Number(ebookLocation) === this.page
     },
     clickShowInfoMenu() {
       this.showInfoMenu = !this.showInfoMenu

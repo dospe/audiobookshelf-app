@@ -32,8 +32,9 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPlay() {
     Log.d(tag, "ON PLAY MEDIA SESSION COMPAT")
-    activeTTSEngine()?.let {
-      it.play()
+    if (activeTTSEngine() != null) {
+      // Checks the server for a position written elsewhere after a longer pause
+      playerNotificationService.resumeTTS()
       return
     }
     playerNotificationService.play()
@@ -301,17 +302,19 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     val isPlaying = tts.state == TTSPlaybackEngine.TTSState.PLAYING
     // Mirrors the audio handling: widgets only send ACTION_DOWN for play/pause,
     // headset/BT buttons arrive as ACTION_UP
+    // Play goes through the service: after a longer pause it checks the server
+    // for a position written elsewhere before the engine goes on
     if (keyEvent?.action == KeyEvent.ACTION_DOWN) {
       when (keyEvent.keyCode) {
-        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (isPlaying) tts.pause() else tts.play()
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (isPlaying) tts.pause() else playerNotificationService.resumeTTS()
         KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> tts.seekParagraph(1)
         KeyEvent.KEYCODE_MEDIA_REWIND -> tts.seekParagraph(-1)
       }
     }
     if (keyEvent?.action == KeyEvent.ACTION_UP) {
       when (keyEvent.keyCode) {
-        KeyEvent.KEYCODE_HEADSETHOOK -> if (isPlaying) tts.pause() else tts.play()
-        KeyEvent.KEYCODE_MEDIA_PLAY -> tts.play()
+        KeyEvent.KEYCODE_HEADSETHOOK -> if (isPlaying) tts.pause() else playerNotificationService.resumeTTS()
+        KeyEvent.KEYCODE_MEDIA_PLAY -> playerNotificationService.resumeTTS()
         KeyEvent.KEYCODE_MEDIA_PAUSE -> tts.pause()
         KeyEvent.KEYCODE_MEDIA_NEXT -> tts.seekChapter(1)
         KeyEvent.KEYCODE_MEDIA_PREVIOUS -> tts.seekChapter(-1)

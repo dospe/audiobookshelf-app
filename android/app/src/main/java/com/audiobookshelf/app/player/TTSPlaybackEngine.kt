@@ -1,12 +1,16 @@
 package com.audiobookshelf.app.player
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.media.AudioAttributesCompat
 import androidx.media.AudioFocusRequestCompat
 import androidx.media.AudioManagerCompat
@@ -154,8 +158,57 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
     hasAudioFocus = false
     AudioManagerCompat.abandonAudioFocusRequest(audioManager, audioFocusRequest)
   }
+
+  // Headphones unplugged, the Bluetooth or USB audio of the car gone: pausing
+  // keeps the speech off the phone speaker and, since a pause syncs the
+  // position, saves where the listening stopped - the way ExoPlayer handles
+  // the same broadcast for audiobooks
+  private var becomingNoisyRegistered = false
+  private val becomingNoisyReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+      mainHandler.post {
+        // Never resume on the speaker when the focus comes back after the output vanished
+        resumeOnFocusGain = false
+        if (state == TTSState.PLAYING) {
+          Log.d(tag, "Audio output gone (becoming noisy) - pausing read aloud")
+          pause()
+        }
+      }
+    }
+  }
+
+  private fun registerBecomingNoisyReceiver() {
+    if (becomingNoisyRegistered) return
+    try {
+      ContextCompat.registerReceiver(context, becomingNoisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), ContextCompat.RECEIVER_NOT_EXPORTED)
+      becomingNoisyRegistered = true
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to register the becoming noisy receiver", e)
+    }
+  }
+
+  private fun unregisterBecomingNoisyReceiver() {
+    if (!becomingNoisyRegistered) return
+    becomingNoisyRegistered = false
+    try {
+      context.unregisterReceiver(becomingNoisyReceiver)
+    } catch (e: Exception) {
+      Log.w(tag, "Failed to unregister the becoming noisy receiver", e)
+    }
+  }
+
   // Position stays on the last paragraph when the book ends; this makes progress report 100%
   var endOfBookReached = false
+    private set
+
+  // When the session was paused and whether the position was moved since: a
+  // resume after a long pause asks the server for a position written elsewhere
+  // meanwhile, unless the user has placed the session themselves (see
+  // PlayerNotificationService.resumeTTS)
+  var pausedAt: Long = 0L
+    private set
+  var positionChangedSincePause = false
     private set
 
   val currentLocation: String?
@@ -263,6 +316,8 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
 
   fun pause() {
     if (state != TTSState.PLAYING) return
+    pausedAt = System.currentTimeMillis()
+    positionChangedSincePause = false
     interrupt()
     setState(TTSState.PAUSED)
   }
@@ -276,6 +331,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
   fun release() {
     resumeOnFocusGain = false
     abandonAudioFocus()
+    unregisterBecomingNoisyReceiver()
     interrupt()
     state = TTSState.STOPPED
     tts?.shutdown()
@@ -290,6 +346,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
     chunks = emptyList()
     chunkIndex = 0
     endOfBookReached = false
+    if (state == TTSState.PAUSED) positionChangedSincePause = true
     if (state == TTSState.PLAYING) {
       interrupt()
       setState(TTSState.PLAYING) // re-notify for notification/position updates
@@ -533,6 +590,7 @@ class TTSPlaybackEngine(val context: Context, val listener: Listener) {
       resumeOnFocusGain = false
       abandonAudioFocus()
     }
+    if (newState == TTSState.PLAYING) registerBecomingNoisyReceiver() else unregisterBecomingNoisyReceiver()
     listener.onTTSStateChange(newState)
   }
 

@@ -650,6 +650,70 @@ The first slice of F1 is in the code (commit "Implement F1 slice…"):
     100 characters, read aloud from the character ratio). Changing the font
     size does not move the position, it only re-paginates.
   - **not yet verified on a device**
+- [x] Reading settings and position across devices (phone reader, car, tablet),
+  counterpart of server 2.36.0-dospe.4:
+  - The appearance saved for a book was not applied when the book opened, only
+    after any later settings change, whenever the read aloud page step
+    differed from 3: `updateSettings` of the epub reader ran the read aloud
+    sync first, and with a changed page step that asked epub.js for the page
+    size (`ttsEstimatePageChars` → `rendition.currentLocation()`) before the
+    book was displayed, which throws (no view manager before the rendition
+    started) and aborted the font size, font and theme with it. The reader now
+    applies the appearance first (`EpubReader.displayedLocation` answers null
+    until the rendition started), `ttsHandleSettingsChange` never throws and
+    `ttsPageCharsEstimate` in the mixin guards every use of the hook.
+  - Per-book settings protocol: the server merges `ebookSettings` updates
+    (a key or a device entry is set by a value and removed by `null`, what is
+    left out stays), so the app sends only the shared keys that changed and
+    its own `devices[deviceId]` entry (`deviceBookSettingsUpdate`), on an
+    older server the whole object as before (`serverMergesBookSettings` on
+    the version in the server settings loaded at start, else the one of the
+    connection config). A save is queued in the preferences
+    (`ereaderPendingBookSettings`, store module `ereader`) before it is sent
+    and dropped only when the server acknowledged it; pending saves go out
+    when the reader mounts, when the connection is back and before the
+    progress of the book is fetched, and the pending update of the open book
+    is applied over the server copy. The 1 s debounce is flushed when the
+    reader closes and when the app goes to the background.
+  - The reader follows a position saved elsewhere while it is open: on the
+    `user_updated` / `user_media_progress_updated` socket events, on return
+    to the foreground and when the network is back it compares the server
+    position with its own recent saves (`recentProgressSaves`, an echo of its
+    own save or anything older than its last save is ignored) and, unless
+    the position is on the displayed page or read aloud speaks here, turns to
+    it or offers it, per the new global setting `remotePosition`
+    (`auto` | `ask` | `off`, "Position from another device" in the settings
+    form). `goToLocation` of the readers displays the position without saving
+    the relocation back (saving the page start here would move the other
+    device in turn); a downloaded book gets the position copied into its
+    local progress.
+  - A failed progress fetch when the book opens (3 s timeout) no longer lets
+    the stale copy overwrite the server: the readers hold their server saves
+    for a 30 s grace period (`progressStale`, `pendingServerProgress`) while
+    the fetch is retried (3, 7, 15, 30, then every 60 s); a position written
+    elsewhere after the copy the book opened from is offered or applied and
+    the pages turned meanwhile are dropped, otherwise the held save goes out.
+  - Native read aloud resumed after a pause of 2 minutes or more (steering
+    wheel, notification, headset, lock screen) refreshes the saved position
+    and continues from it when it was written after the pause and points
+    elsewhere (`PlayerNotificationService.resumeTTS`, `TTSPlayer.resumeSession`;
+    the pause flush carries the pause time, so anything newer was written on
+    another device). The reader's play button passes `skipRemoteCheck` - the
+    reader follows the server itself. Not applied when the position was moved
+    while paused.
+  - A downloaded book picked in Android Auto takes the newer of the phone's
+    local progress and the linked server item's progress
+    (`savedEbookProgress` with `includeLinkedServerProgress`; the server
+    progress is refreshed before the resume). iOS does the same in
+    `resolveSavedProgress`.
+  - iOS `syncLocalSessionsWithServer` sends a newer local ebook position to
+    the server the way Android's `syncLocalMediaProgressForUser` does (a
+    downloaded book read offline, a failed save).
+  - Android: the TTS engine pauses on `ACTION_AUDIO_BECOMING_NOISY`
+    (headphones unplugged, the car's Bluetooth/USB audio gone), which keeps
+    the speech off the speaker and syncs the position; iOS already paused on
+    the route change.
+  - **not yet verified on a device**
 - [x] F3: iOS engine (see A.10); **not yet verified on a device**
 - [ ] F4: CarPlay — **postponed indefinitely** (requires the CarPlay audio
   entitlement from Apple, i.e. a paid account + approval; a sideload build

@@ -16,8 +16,28 @@ import { normalizeEreaderSettings } from '@/utils/ereaderSettings'
 
 const LEGACY_STORAGE_KEY = 'ereaderSettings'
 const DEVICE_ID_PREFERENCE_KEY = 'ereaderDeviceId'
+// Per-book settings updates not yet acknowledged by the server, keyed by
+// library item id: { serverAddress, merge, payload, queuedAt }. Kept in the
+// preferences so a save the app could not send (locked right after a font
+// change, killed in the background) goes out on the next start instead of
+// being overruled by the server copy when the book is opened again.
+const PENDING_BOOK_SETTINGS_PREFERENCE_KEY = 'ereaderPendingBookSettings'
+const PENDING_BOOK_SETTINGS_MAX_AGE = 30 * 24 * 60 * 60 * 1000
 
 let loadPromise = null
+let flushPromise = null
+
+function readJsonPreference(store, key) {
+  return store.$localStore.getPreferenceByKey(key).then((raw) => {
+    try {
+      const parsed = raw ? JSON.parse(raw) : null
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch (error) {
+      console.error(`[ereader] Invalid preference "${key}"`, error)
+      return {}
+    }
+  })
+}
 
 function readLegacySettings() {
   try {
@@ -69,14 +89,24 @@ export const state = () => ({
   // null until loaded
   settings: null,
   // Id of this device (loaded with the settings), null until loaded
-  deviceId: null
+  deviceId: null,
+  // Per-book settings updates waiting for the server (see PENDING_BOOK_SETTINGS_PREFERENCE_KEY), null until loaded
+  pendingBookSettings: null
 })
 
 export const getters = {
   isLoaded: (state) => !!state.settings,
   /** Loaded settings, or the defaults while not loaded yet */
   getSettings: (state) => state.settings || normalizeEreaderSettings(null),
-  getDeviceId: (state) => state.deviceId
+  getDeviceId: (state) => state.deviceId,
+  /**
+   * The per-book settings update of a book still waiting for the server, or null
+   * @returns {(libraryItemId: string, serverAddress: string) => { merge: boolean, payload: Object|null }|null}
+   */
+  getPendingBookSettings: (state) => (libraryItemId, serverAddress) => {
+    const pending = state.pendingBookSettings?.[libraryItemId]
+    return pending && pending.serverAddress === serverAddress ? pending : null
+  }
 }
 
 export const actions = {
@@ -119,6 +149,66 @@ export const actions = {
     commit('setSettings', normalized)
     await this.$localStore.setEreaderSettings(normalized)
     return normalized
+  },
+  /** Load the pending per-book settings updates once, dropping stale ones */
+  async loadPendingBookSettings({ state, commit }) {
+    if (state.pendingBookSettings) return state.pendingBookSettings
+    const stored = await readJsonPreference(this, PENDING_BOOK_SETTINGS_PREFERENCE_KEY)
+    const pending = {}
+    for (const libraryItemId of Object.keys(stored)) {
+      const entry = stored[libraryItemId]
+      if (!entry?.serverAddress || entry.payload === undefined || Date.now() - (entry.queuedAt || 0) > PENDING_BOOK_SETTINGS_MAX_AGE) continue
+      pending[libraryItemId] = entry
+    }
+    commit('setPendingBookSettings', pending)
+    return pending
+  },
+  /**
+   * Remember a per-book settings update until the server acknowledges it
+   * @param {{ libraryItemId: string, serverAddress: string, merge: boolean, payload: Object|null }} update
+   */
+  async queueBookSettings({ dispatch, commit, state }, update) {
+    await dispatch('loadPendingBookSettings')
+    commit('setPendingBookSettingsEntry', { libraryItemId: update.libraryItemId, entry: { ...update, queuedAt: Date.now() } })
+    await this.$localStore.setPreferenceByKey(PENDING_BOOK_SETTINGS_PREFERENCE_KEY, JSON.stringify(state.pendingBookSettings))
+  },
+  /**
+   * Forget a pending update once it reached the server - only when it is still
+   * the one queued (a newer edit may have replaced it meanwhile)
+   * @param {{ libraryItemId: string, payload: Object|null }} update
+   */
+  async clearPendingBookSettings({ dispatch, commit, state }, { libraryItemId, payload }) {
+    await dispatch('loadPendingBookSettings')
+    const pending = state.pendingBookSettings[libraryItemId]
+    if (!pending || JSON.stringify(pending.payload) !== JSON.stringify(payload)) return
+    commit('setPendingBookSettingsEntry', { libraryItemId, entry: null })
+    await this.$localStore.setPreferenceByKey(PENDING_BOOK_SETTINGS_PREFERENCE_KEY, JSON.stringify(state.pendingBookSettings))
+  },
+  /**
+   * Send the pending updates of the connected server (one book, or all of them)
+   * @param {{ libraryItemId?: string }} [options]
+   */
+  flushPendingBookSettings({ dispatch, state, rootState, rootGetters }, options = {}) {
+    if (flushPromise) return flushPromise
+    flushPromise = (async () => {
+      const serverAddress = rootGetters['user/getServerAddress']
+      if (!serverAddress || !rootState.user.user || !rootState.networkConnected) return
+      const pending = await dispatch('loadPendingBookSettings')
+      const libraryItemIds = Object.keys(pending).filter((id) => pending[id].serverAddress === serverAddress && (!options.libraryItemId || id === options.libraryItemId))
+      for (const libraryItemId of libraryItemIds) {
+        const entry = pending[libraryItemId]
+        try {
+          await this.$nativeHttp.patch(`/api/me/progress/${libraryItemId}`, { ebookSettings: entry.payload }, { connectTimeout: 5000, readTimeout: 5000 })
+          await dispatch('clearPendingBookSettings', { libraryItemId, payload: entry.payload })
+          console.log(`[ereader] Sent the pending book settings of ${libraryItemId}`)
+        } catch (error) {
+          console.warn(`[ereader] Pending book settings of ${libraryItemId} still not sent:`, error?.message || error)
+        }
+      }
+    })().finally(() => {
+      flushPromise = null
+    })
+    return flushPromise
   }
 }
 
@@ -128,5 +218,14 @@ export const mutations = {
   },
   setDeviceId(state, deviceId) {
     state.deviceId = deviceId
+  },
+  setPendingBookSettings(state, pending) {
+    state.pendingBookSettings = pending
+  },
+  setPendingBookSettingsEntry(state, { libraryItemId, entry }) {
+    const pending = { ...(state.pendingBookSettings || {}) }
+    if (entry) pending[libraryItemId] = entry
+    else delete pending[libraryItemId]
+    state.pendingBookSettings = pending
   }
 }

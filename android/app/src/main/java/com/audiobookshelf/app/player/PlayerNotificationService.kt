@@ -276,12 +276,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     notifyChildrenChanged(CONTINUE_ROOT)
   }
 
-  fun playTTS(libraryItemId: String?, chapterIndex: Int?, paragraphIndex: Int?) {
+  fun playTTS(libraryItemId: String?, chapterIndex: Int?, paragraphIndex: Int?, skipRemoteCheck: Boolean = false) {
     val engine = getTTSEngine()
 
     // No book given - resume the running session (reader play/pause)
     if (libraryItemId.isNullOrEmpty()) {
-      startTTSPlayback(chapterIndex, paragraphIndex)
+      if (chapterIndex != null) startTTSPlayback(chapterIndex, paragraphIndex)
+      else resumeTTS(skipRemoteCheck)
       return
     }
 
@@ -314,6 +315,50 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     refreshEbookProgress(book.libraryItemId) {
       applyTTSDefaults(book, engine)
       savedTTSPosition(book)?.let { (ci, pi) -> engine.seekTo(ci, pi) }
+      startTTSPlayback(null, null)
+    }
+  }
+
+  /** A read aloud session paused for this long is checked against the server before it goes on */
+  private val ttsResumeRemoteCheckAfterMs = 2 * 60 * 1000L
+
+  /**
+   * Resume the read aloud session (steering wheel, notification, headset, the
+   * reader's play button). After a longer pause the book may have been read
+   * further elsewhere - the tablet, the phone reader - so the saved position
+   * is refreshed from the server first and, when it was written after the
+   * pause and points elsewhere, the session continues from it. Skipped when
+   * the reader has placed the session itself (it follows the server on its
+   * own) or the position was moved while paused. A short pause resumes at
+   * once.
+   */
+  fun resumeTTS(skipRemoteCheck: Boolean = false) {
+    val engine = getTTSEngine()
+    val book = engine.book
+    val pausedAt = engine.pausedAt
+    val checkServer = book != null &&
+      engine.state == TTSPlaybackEngine.TTSState.PAUSED &&
+      !skipRemoteCheck &&
+      !engine.positionChangedSincePause &&
+      System.currentTimeMillis() - pausedAt >= ttsResumeRemoteCheckAfterMs
+    if (!checkServer || book == null) {
+      startTTSPlayback(null, null)
+      return
+    }
+    refreshEbookProgress(book.libraryItemId) {
+      if (engine.book?.libraryItemId == book.libraryItemId && engine.state == TTSPlaybackEngine.TTSState.PAUSED && !engine.positionChangedSincePause) {
+        // The pause synced the position with the pause time, so anything newer
+        // on the server (or in the local db of a downloaded copy) was written elsewhere
+        val saved = savedEbookProgress(book.libraryItemId)
+        if (saved != null && saved.lastUpdate > pausedAt + 5000 && saved.progress < 1.0) {
+          val position = book.positionForLocation(saved.location)
+            ?: if (saved.progress > 0.0) book.positionForProgress(saved.progress) else null
+          if (position != null && (position.first != engine.chapterIndex || position.second != engine.paragraphIndex)) {
+            AbsLogger.info(tag, "resumeTTS: \"${book.title}\" was read further elsewhere since the pause - continuing from ${saved.location ?: "progress ${saved.progress}"}")
+            engine.seekTo(position.first, position.second)
+          }
+        }
+      }
       startTTSPlayback(null, null)
     }
   }
@@ -575,21 +620,36 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
    * Last saved ebookLocation/ebookProgress for the item - the same progress the
    * reader and TTSProgressSyncer write. Null when the book was never opened.
    *
-   * A server item can have the position in two places: the server (written by
-   * the reader on any device) and, when the book is downloaded, the local db.
-   * Either can be the newer one - the phone reader may have been offline, or
-   * the server progress cache may date from before the phone session - so the
-   * most recently updated one wins.
+   * The position can be in two places: the server (written by the reader on
+   * any device; for a downloaded copy under the server item it is linked to)
+   * and, when the book is downloaded, the local db. Either can be the newer
+   * one - the phone reader may have been offline, or the book was read further
+   * on another device since the phone last saw it - so the most recently
+   * updated one wins.
    */
   private fun savedEbookProgress(
     libraryItemId: String,
     // The whole local progress table is read from disk - lists pass it in once
     // instead of paying for it per row
-    localProgressEntries: List<LocalMediaProgress>? = null
+    localProgressEntries: List<LocalMediaProgress>? = null,
+    // For a downloaded copy, also look at the linked server item's progress
+    // (refreshed before a resume, see refreshEbookProgress); off for the lists,
+    // which would pay a db read per row for it
+    includeLinkedServerProgress: Boolean = localProgressEntries == null
   ): SavedEbookProgress? {
     if (libraryItemId.startsWith("local")) {
-      val progress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId) ?: return null
-      return SavedEbookProgress(progress.ebookLocation, progress.ebookProgress ?: 0.0, progress.lastUpdate)
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+        ?.let { SavedEbookProgress(it.ebookLocation, it.ebookProgress ?: 0.0, it.lastUpdate) }
+      val linkedServerProgress = if (includeLinkedServerProgress) {
+        serverLibraryItemIdFor(libraryItemId)?.let { serverLibraryItemId ->
+          mediaManager.serverUserMediaProgress
+            .find { it.libraryItemId == serverLibraryItemId && it.episodeId.isNullOrEmpty() }
+            ?.let { SavedEbookProgress(it.ebookLocation, it.ebookProgress ?: 0.0, it.lastUpdate) }
+        }
+      } else null
+      return listOfNotNull(localProgress, linkedServerProgress)
+        .filter { it.progress > 0.0 || !it.location.isNullOrEmpty() }
+        .maxByOrNull { it.lastUpdate }
     }
 
     val serverProgress = mediaManager.serverUserMediaProgress
