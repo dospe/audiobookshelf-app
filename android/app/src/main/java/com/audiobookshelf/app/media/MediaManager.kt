@@ -282,6 +282,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     mediaProgress.ebookLocation = ebookLocation ?: mediaProgress.ebookLocation
     mediaProgress.ebookProgress = ebookProgress
     mediaProgress.lastUpdate = lastUpdate
+    // The server moves its furthest place the same way
+    if (ebookProgress > (mediaProgress.furthestEbookProgress ?: 0.0)) {
+      mediaProgress.furthestEbookLocation = ebookLocation ?: mediaProgress.furthestEbookLocation
+      mediaProgress.furthestEbookProgress = ebookProgress
+    }
   }
 
   /**

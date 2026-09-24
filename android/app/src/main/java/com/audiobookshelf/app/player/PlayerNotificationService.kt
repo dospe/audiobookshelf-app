@@ -76,6 +76,8 @@ const val PLAYER_EXO = "exo-player"
 const val ACTION_TTS_PLAY_PAUSE = "com.audiobookshelf.app.ACTION_TTS_PLAY_PAUSE"
 const val ACTION_TTS_STOP = "com.audiobookshelf.app.ACTION_TTS_STOP"
 const val TTS_NOTIFICATION_ID = 11
+// The car offers the furthest place reached while it is at least this much of the book ahead (as in the phone reader)
+const val FURTHEST_PLACE_MIN_DISTANCE = 0.01
 
 class PlayerNotificationService : MediaBrowserServiceCompat() {
 
@@ -674,6 +676,42 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       ?: if (saved.progress > 0.0) book.positionForProgress(saved.progress) else null
   }
 
+  /**
+   * The furthest place reached in the book being read aloud (kept by the
+   * server, see MediaProgress.furthestEbookProgress), while it is at least
+   * FURTHEST_PLACE_MIN_DISTANCE of the book ahead of the spoken paragraph.
+   * Null otherwise - the car shows its button only then.
+   */
+  private fun ttsFurthestPlace(): Pair<String?, Double>? {
+    val engine = ttsEngine ?: return null
+    val book = engine.book ?: return null
+    val serverLibraryItemId = serverLibraryItemIdFor(book.libraryItemId) ?: return null
+    val mediaProgress = mediaManager.serverUserMediaProgress
+      .find { it.libraryItemId == serverLibraryItemId && it.episodeId.isNullOrEmpty() } ?: return null
+    val furthestProgress = mediaProgress.furthestEbookProgress ?: return null
+    if (furthestProgress - engine.progress < FURTHEST_PLACE_MIN_DISTANCE) return null
+    return Pair(mediaProgress.furthestEbookLocation, furthestProgress)
+  }
+
+  /**
+   * Custom action of the car: continue reading aloud from the furthest place
+   * reached (right away - the car shows no confirm). The new position is
+   * saved at once, so the phone reader resumes there too.
+   */
+  fun ttsGoToFurthestPlace() {
+    val engine = ttsEngine ?: return
+    val book = engine.book ?: return
+    val (location, progress) = ttsFurthestPlace() ?: return
+    val position = book.positionForLocation(location) ?: book.positionForProgress(progress)
+    AbsLogger.info("PlayerNotificationService", "ttsGoToFurthestPlace: going to ${(progress * 100).toInt()}% of \"${book.title}\"")
+    engine.seekTo(position.first, position.second)
+    ttsProgressSyncer.paragraphReached()
+    // Playing: the sync timer saves it; paused: saved now
+    if (engine.state != TTSPlaybackEngine.TTSState.PLAYING) ttsProgressSyncer.stop()
+    updateTTSMediaSessionMetadata()
+    updateTTSMediaSessionState()
+  }
+
   /** An ebook the car can continue reading aloud, and when its position was last saved */
   private data class EbookInProgress(val libraryItemId: String, val title: String, val author: String?, val lastUpdate: Long)
 
@@ -882,6 +920,17 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
           PlaybackStateCompat.ACTION_SEEK_TO
       )
+      .apply {
+        if (ttsFurthestPlace() != null) {
+          addCustomAction(
+            PlaybackStateCompat.CustomAction.Builder(
+              CUSTOM_ACTION_GO_TO_FURTHEST_PLACE,
+              getString(R.string.action_go_to_furthest_place),
+              R.drawable.last_page_24
+            ).build()
+          )
+        }
+      }
       .setState(
         if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
         engine.estimatedPositionMs,

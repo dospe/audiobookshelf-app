@@ -21,7 +21,11 @@ class MediaProgress(
   // server): the read aloud language of the book at the top level, the
   // appearance per device under `devices`. Kept as sent - only ttsLanguage is
   // read natively (see PlayerNotificationService.resolveTTSLanguage)
-  var ebookSettings:Map<String, Any?>? = null
+  var ebookSettings:Map<String, Any?>? = null,
+  // Furthest place ever reached in the ebook (fork server, kept from
+  // ebookProgress): Android Auto offers to go back there while reading aloud
+  var furthestEbookLocation:String? = null,
+  var furthestEbookProgress:Double? = null
 ) : MediaProgressWrapper(isFinished, currentTime, progress) {
 
   @get:JsonIgnore
