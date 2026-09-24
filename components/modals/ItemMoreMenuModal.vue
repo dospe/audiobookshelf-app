@@ -79,6 +79,14 @@ export default {
           })
         }
 
+        if (this.furthestEbookPosition) {
+          items.push({
+            text: this.$strings.ButtonGoToFurthestEbookPlace,
+            value: 'furthestEbookPlace',
+            icon: 'last_page'
+          })
+        }
+
         if (this.progressPercent > 0) {
           items.push({
             text: this.$strings.MessageDiscardProgress,
@@ -271,6 +279,20 @@ export default {
       const currentTime = Math.max(this.serverItemProgress.currentTime || 0, this.localItemProgress?.currentTime || 0)
       return furthestTime - currentTime > 30 ? furthestTime : null
     },
+    /**
+     * The furthest place the server saw in the ebook, offered while it is
+     * clearly ahead of where reading would resume. Not for mobi, whose reader
+     * cannot open at a saved place.
+     */
+    furthestEbookPosition() {
+      if (this.isPodcast || !this.ebookFile || ['mobi', 'azw3'].includes(this.ebookFile.ebookFormat)) return null
+      const ebookProgress = Number(this.serverItemProgress?.furthestEbookProgress) || 0
+      if (!ebookProgress) return null
+      const currentProgress = Math.max(Number(this.serverItemProgress.ebookProgress) || 0, Number(this.localItemProgress?.ebookProgress) || 0)
+      if (ebookProgress - currentProgress < 0.01) return null
+      const ebookLocation = this.serverItemProgress.furthestEbookLocation ? String(this.serverItemProgress.furthestEbookLocation) : ''
+      return { ebookLocation, ebookProgress }
+    },
     furthestChapter() {
       if (this.furthestTime === null) return null
       return (this.media.chapters || []).find((ch) => ch.start <= this.furthestTime && this.furthestTime < ch.end) || null
@@ -312,6 +334,8 @@ export default {
         this.$router.push(`/media/${this.mediaId}/history?title=${this.title}`)
       } else if (action === 'furthestPosition') {
         this.goToFurthestPosition()
+      } else if (action === 'furthestEbookPlace') {
+        this.goToFurthestEbookPlace()
       } else if (action === 'discardProgress') {
         this.clearProgressClick()
       } else if (action === 'deleteLocal') {
@@ -414,6 +438,46 @@ export default {
       } else {
         this.$eventBus.$emit('play-item', { libraryItemId: this.serverLibraryItemId, startTime })
       }
+    },
+    /**
+     * Saves the furthest place as the reading position and opens the reader,
+     * which resumes from it
+     */
+    async goToFurthestEbookPlace() {
+      await this.$hapticsImpact()
+      const position = this.furthestEbookPosition
+      if (!position) return
+
+      const { value } = await Dialog.confirm({
+        title: this.$strings.HeaderConfirm,
+        message: this.$getString('MessageConfirmGoToFurthestEbookPlace', [Math.round(position.ebookProgress * 100)])
+      })
+      if (!value) return
+
+      this.$emit('update:processing', true)
+      const payload = { ebookLocation: position.ebookLocation, ebookProgress: position.ebookProgress }
+      const localLibraryItem = this.localLibraryItem?.media?.ebookFile ? this.localLibraryItem : null
+      if (localLibraryItem) {
+        const localResponse = await this.$db.updateLocalEbookProgress({ localLibraryItemId: localLibraryItem.id, ...payload }).catch((error) => {
+          console.error('Failed to save the furthest place to the local item', error)
+          return null
+        })
+        if (localResponse?.localMediaProgress) {
+          this.$store.commit('globals/updateLocalMediaProgress', localResponse.localMediaProgress)
+        }
+      }
+      let saved = true
+      await this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+        console.error('Failed to save the furthest place to the server', error)
+        saved = false
+      })
+      this.$emit('update:processing', false)
+      if (!saved && !localLibraryItem) {
+        this.$toast.error(this.$strings.ToastGoToFurthestEbookPlaceFailed)
+        return
+      }
+
+      this.$store.commit('showReader', { libraryItem: localLibraryItem || this.libraryItem, keepProgress: true })
     },
     async clearProgressClick() {
       await this.$hapticsImpact()
