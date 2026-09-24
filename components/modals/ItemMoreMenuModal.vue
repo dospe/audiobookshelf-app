@@ -71,6 +71,14 @@ export default {
           })
         }
 
+        if (this.furthestTime !== null) {
+          items.push({
+            text: this.$strings.ButtonGoToFurthestPosition,
+            value: 'furthestPosition',
+            icon: 'fast_forward'
+          })
+        }
+
         if (this.progressPercent > 0) {
           items.push({
             text: this.$strings.MessageDiscardProgress,
@@ -251,6 +259,25 @@ export default {
       if (this.useEBookProgress) return Math.max(Math.min(1, this.userItemProgress.ebookProgress), 0)
       return Math.max(Math.min(1, this.userItemProgress?.progress || 0), 0)
     },
+    /**
+     * The furthest position the server saw in the book, offered while it is
+     * clearly ahead of where listening would resume (the local progress of a
+     * downloaded book may be ahead of the server and newer)
+     */
+    furthestTime() {
+      if (this.isPodcast || this.userIsFinished) return null
+      const furthestTime = this.serverItemProgress?.furthestTime
+      if (!furthestTime) return null
+      const currentTime = Math.max(this.serverItemProgress.currentTime || 0, this.localItemProgress?.currentTime || 0)
+      return furthestTime - currentTime > 30 ? furthestTime : null
+    },
+    furthestChapter() {
+      if (this.furthestTime === null) return null
+      return (this.media.chapters || []).find((ch) => ch.start <= this.furthestTime && this.furthestTime < ch.end) || null
+    },
+    playerIsStartingPlayback() {
+      return this.$store.state.playerIsStartingPlayback
+    },
     showRSSFeedOption() {
       if (this.hideRssFeedOption) return false
       if (!this.serverLibraryItemId) return false
@@ -283,6 +310,8 @@ export default {
         else this.toggleFinished()
       } else if (action === 'history') {
         this.$router.push(`/media/${this.mediaId}/history?title=${this.title}`)
+      } else if (action === 'furthestPosition') {
+        this.goToFurthestPosition()
       } else if (action === 'discardProgress') {
         this.clearProgressClick()
       } else if (action === 'deleteLocal') {
@@ -364,6 +393,27 @@ export default {
         })
       }
       this.$emit('update:processing', false)
+    },
+    async goToFurthestPosition() {
+      await this.$hapticsImpact()
+      const startTime = this.furthestTime
+      if (startTime === null || this.playerIsStartingPlayback) return
+
+      let position = this.$secondsToTimestamp(startTime)
+      if (this.furthestChapter?.title) position += ` (${this.furthestChapter.title})`
+      const { value } = await Dialog.confirm({
+        title: this.$strings.HeaderConfirm,
+        message: this.$getString('MessageConfirmGoToFurthestPosition', [position])
+      })
+      if (!value) return
+
+      this.$store.commit('setPlayerIsStartingPlayback', this.serverLibraryItemId || this.localLibraryItemId)
+      if (this.localLibraryItemId) {
+        // Prefer the downloaded copy
+        this.$eventBus.$emit('play-item', { libraryItemId: this.localLibraryItemId, serverLibraryItemId: this.serverLibraryItemId, startTime })
+      } else {
+        this.$eventBus.$emit('play-item', { libraryItemId: this.serverLibraryItemId, startTime })
+      }
     },
     async clearProgressClick() {
       await this.$hapticsImpact()
