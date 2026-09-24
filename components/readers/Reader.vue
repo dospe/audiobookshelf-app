@@ -7,6 +7,9 @@
           <span class="material-symbols text-3xl text-fg">chevron_left</span>
         </button>
         <div class="flex-grow" />
+        <button v-if="furthestPosition" type="button" :aria-label="$strings.ButtonGoToFurthestEbookPlace" class="inline-flex mx-2" @click.stop="clickFurthestBtn">
+          <span class="material-symbols text-2xl text-fg">last_page</span>
+        </button>
         <button v-if="isComic || isEpub || isDocument" type="button" class="inline-flex mx-2" @click.stop="clickTOCBtn">
           <span class="material-symbols text-2xl text-fg">format_list_bulleted</span>
         </button>
@@ -131,6 +134,7 @@
 
 <script>
 import { Capacitor } from '@capacitor/core'
+import { Dialog } from '@capacitor/dialog'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
@@ -153,6 +157,8 @@ const PROGRESS_FETCH_RETRY_DELAYS_MS = [3000, 7000, 15000, 30000, 60000]
 // Positions this reader saved recently, kept to tell an echo of its own save
 // from a position another device wrote
 const RECENT_PROGRESS_SAVES_MAX = 40
+// The furthest place reached is offered while it is at least this much of the book ahead
+const FURTHEST_PLACE_MIN_DISTANCE = 0.01
 
 export default {
   data() {
@@ -190,6 +196,8 @@ export default {
       lastProgressSavedAt: 0,
       // A newer position from another device waiting for the user (setting "ask"): { ebookLocation, ebookProgress, percent }
       remotePositionOffer: null,
+      // Ratio of the book the reader is at as far as it saved or turned to, null until then
+      readerEbookProgress: null,
       // Global defaults as they were when the book was opened (see BOOK_SETTING_KEYS)
       globalEreaderSettings: null,
       // Per-book settings of the open book as stored (server or cache): the shared keys and the appearance of every device
@@ -213,6 +221,7 @@ export default {
           this.ebookLanguage = null
           this.progressReady = false
           this.remotePositionOffer = null
+          this.readerEbookProgress = null
           this.recentProgressSaves = []
           this.lastProgressSavedAt = 0
           this.registerListeners()
@@ -333,6 +342,27 @@ export default {
      */
     serverMergesBookSettings() {
       return serverMergesBookSettings(this.$store.state.serverSettings?.version || this.$store.state.user.serverConnectionConfig?.version)
+    },
+    /**
+     * The furthest place reached in the book (kept by the server), offered in
+     * the toolbar while it is clearly ahead of the place being read. Not for
+     * mobi, whose reader cannot turn to a saved place.
+     * @returns {{ ebookLocation: string, ebookProgress: number, percent: number }|null}
+     */
+    furthestPosition() {
+      if (!this.keepProgress || !this.progressReady || this.isMobi || !this.serverLibraryItemId) return null
+      const serverProgress = this.$store.getters['user/getUserMediaProgress'](this.serverLibraryItemId)
+      const ebookProgress = Number(serverProgress?.furthestEbookProgress) || 0
+      if (!ebookProgress || ebookProgress - this.currentEbookProgress < FURTHEST_PLACE_MIN_DISTANCE) return null
+      const ebookLocation = serverProgress.furthestEbookLocation ? String(serverProgress.furthestEbookLocation) : ''
+      return { ebookLocation, ebookProgress, percent: Math.round(ebookProgress * 100) }
+    },
+    /** Ratio of the book being read: what the reader saved last, else the saved progress it opened from */
+    currentEbookProgress() {
+      if (this.readerEbookProgress !== null) return this.readerEbookProgress
+      const serverProgress = this.serverLibraryItemId ? this.$store.getters['user/getUserMediaProgress'](this.serverLibraryItemId) : null
+      const localProgress = this.localLibraryItem ? this.$store.getters['globals/getLocalMediaProgressById'](this.localLibraryItem.id) : null
+      return Math.max(Number(serverProgress?.ebookProgress) || 0, Number(localProgress?.ebookProgress) || 0)
     },
     readerComponentName() {
       if (this.ebookType === 'epub') return 'readers-epub-reader'
@@ -826,6 +856,49 @@ export default {
     clickMetadataBtn() {
       this.$refs.readerComponent?.clickShowInfoMenu()
     },
+    async clickFurthestBtn() {
+      const position = this.furthestPosition
+      if (!position) return
+      this.hideToolbar()
+      const { value } = await Dialog.confirm({
+        title: this.$strings.HeaderConfirm,
+        message: this.$getString('MessageConfirmGoToFurthestEbookPlace', [position.percent])
+      })
+      const reader = this.$refs.readerComponent
+      if (!value || !this.show || !reader?.goToLocation) return
+      const moved = await reader.goToLocation(position.ebookLocation, position.ebookProgress)
+      if (moved === false) {
+        this.$toast.error(this.$strings.ToastGoToFurthestEbookPlaceFailed)
+        return
+      }
+      this.remotePositionOffer = null
+      await this.saveTurnedToPosition(position)
+    },
+    /**
+     * The readers do not save a place they were turned to (see goToLocation),
+     * the furthest place is saved here: it is where reading resumes now, on
+     * this device and the others.
+     * @param {{ ebookLocation: string, ebookProgress: number }} position
+     */
+    async saveTurnedToPosition({ ebookLocation, ebookProgress }) {
+      const payload = { ebookLocation, ebookProgress }
+      this.readerEbookProgress = ebookProgress
+      if (this.localLibraryItem) {
+        const localResponse = await this.$db.updateLocalEbookProgress({ localLibraryItemId: this.localLibraryItem.id, ...payload }).catch((error) => {
+          console.error('[Reader] Failed to save the furthest place to the local item', error)
+          return null
+        })
+        if (localResponse?.localMediaProgress) {
+          this.$store.commit('globals/updateLocalMediaProgress', localResponse.localMediaProgress)
+        }
+      }
+      if (this.serverLibraryItemId) {
+        this.progressSaved(payload)
+        await this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
+          console.error('[Reader] Failed to save the furthest place to the server', error)
+        })
+      }
+    },
     clickTOCBtn() {
       this.hideToolbar()
       if (this.isComic) {
@@ -915,6 +988,7 @@ export default {
     /** The reader saved a position to the server (see isOwnSavedPosition) */
     progressSaved(payload) {
       if (!payload) return
+      this.readerEbookProgress = Number(payload.ebookProgress) || 0
       this.lastProgressSavedAt = Date.now()
       this.recentProgressSaves.push({ ebookLocation: payload.ebookLocation ? String(payload.ebookLocation) : '', ebookProgress: Number(payload.ebookProgress) || 0, at: this.lastProgressSavedAt })
       if (this.recentProgressSaves.length > RECENT_PROGRESS_SAVES_MAX) this.recentProgressSaves.splice(0, this.recentProgressSaves.length - RECENT_PROGRESS_SAVES_MAX)
@@ -1006,6 +1080,7 @@ export default {
       console.log(`[Reader] Turning to the position saved elsewhere (${offer.percent}%, ${offer.ebookLocation || 'no location'})`)
       const moved = await reader.goToLocation(offer.ebookLocation, offer.ebookProgress)
       if (moved === false) return
+      this.readerEbookProgress = offer.ebookProgress
       this.$toast.info(this.$getString('MessageRemotePositionApplied', [offer.percent]))
       // A downloaded book resumes from its local progress next time - keep it in step
       await this.copyServerPositionToLocal({ ebookLocation: offer.ebookLocation, ebookProgress: offer.ebookProgress, lastUpdate: Date.now() })
