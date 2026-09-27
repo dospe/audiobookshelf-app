@@ -14,6 +14,13 @@
 import ePub, { EpubCFI } from 'epubjs'
 import TTSPlayer from '@/mixins/ttsPlayer'
 
+// Displays of a saved place before it counts as not reached (see displayTarget)
+const DISPLAY_TARGET_ATTEMPTS = 3
+// A page starting this close to the saved place (ratio of the book) still counts as reaching it
+const DISPLAY_TARGET_TOLERANCE = 0.005
+// Time for a displayed section to reflow once the theme is applied (see waitForLayout)
+const DISPLAY_LAYOUT_SETTLE_MS = 100
+
 export default {
   mixins: [TTSPlayer],
   props: {
@@ -43,6 +50,11 @@ export default {
       pendingServerProgress: null,
       // Set by goToLocation: the relocation it causes is not saved
       suppressRelocationSave: false,
+      // Ratio of the saved position the book could not be opened at: pages
+      // behind it are not saved, so a failed resume does not overwrite it
+      resumeGuardProgress: null,
+      // In-flight generation of the cfi locations (see generateLocations)
+      locationsPromise: null,
       ttsSectionIndex: 0,
       ereaderSettings: {
         theme: 'dark',
@@ -194,6 +206,8 @@ export default {
       }
     },
     goToChapter(href) {
+      // Chosen in the toc: saved from here on even when behind a failed resume
+      this.resumeGuardProgress = null
       return this.rendition?.display(href)
     },
     /**
@@ -207,22 +221,85 @@ export default {
      */
     async goToLocation(ebookLocation, ebookProgress) {
       if (!this.rendition || !this.book) return false
-      let target = this.resolveDisplayTarget(ebookLocation || null, Number(ebookProgress) || 0)
-      if (!target && Number(ebookProgress) > 0 && !this.book.locations.length()) {
-        await this.generateLocations()
-        target = this.resolveDisplayTarget(ebookLocation || null, Number(ebookProgress) || 0)
-      }
+      const location = ebookLocation || null
+      const progress = Number(ebookProgress) || 0
+      if (this.locationsNeededFor(location, progress)) await this.generateLocations()
+      const target = this.resolveDisplayTarget(location, progress)
       if (!target) return false
       this.suppressRelocationSave = true
       this.currentLocationCfi = target
+      let reached = false
       try {
-        await this.rendition.display(target)
+        reached = await this.displayTarget(target)
       } catch (error) {
         console.error(`[EpubReader] Failed to display ${target}`, error)
-        this.suppressRelocationSave = false
+      }
+      this.suppressRelocationSave = false
+      this.currentLocationCfi = this.displayedLocation()?.start?.cfi || this.currentLocationCfi
+      this.updateDisplayedProgress()
+      if (!reached) {
+        console.error(`[EpubReader] Did not reach ${target}`)
         return false
       }
+      this.resumeGuardProgress = null
       return true
+    },
+    /**
+     * Display a target and check the page shows it. epub.js lands short of a
+     * place deep in a long section while the section is still being laid
+     * out (the section start, or pages before the place); displaying it
+     * again once the layout is done gets there.
+     * @param {string} target - cfi or spine href
+     * @returns {Promise<boolean>} whether the displayed page shows the target
+     */
+    async displayTarget(target) {
+      for (let attempt = 1; attempt <= DISPLAY_TARGET_ATTEMPTS; attempt++) {
+        await this.rendition.display(target)
+        await this.waitForLayout()
+        if (this.isDisplayingTarget(target, 0)) return true
+        console.warn(`[EpubReader] Landed away from ${target} (attempt ${attempt})`)
+      }
+      return this.isDisplayingTarget(target, DISPLAY_TARGET_TOLERANCE)
+    },
+    /**
+     * Wait until the displayed section is laid out: the theme applied when a
+     * section renders reflows it after the display resolved, moving the page,
+     * and the relocation is reported a frame later
+     */
+    waitForLayout() {
+      return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, DISPLAY_LAYOUT_SETTLE_MS))))
+    },
+    /**
+     * Whether the displayed page shows a display target: the page holds the
+     * cfi, or starts within the tolerance from it. A chapter target (spine
+     * href, chapter cfi) is shown by any page of the chapter.
+     * @param {string} target - cfi or spine href
+     * @param {number} tolerance - ratio of the book the page start may be off
+     * @returns {boolean}
+     */
+    isDisplayingTarget(target, tolerance) {
+      const location = this.displayedLocation()
+      if (!location?.start?.cfi || !location?.end?.cfi) return false
+      if (this.isChapterGranularityLocation(target)) {
+        const section = this.getSpineSection(target)
+        return !section || section.index === location.start.index
+      }
+      try {
+        const cfiCompare = new EpubCFI()
+        if (cfiCompare.compare(target, location.start.cfi) >= 0 && cfiCompare.compare(target, location.end.cfi) <= 0) return true
+      } catch (error) {
+        return false
+      }
+      if (!tolerance || !this.book.locations.length()) return false
+      const targetPercentage = this.book.locations.percentageFromCfi(target)
+      return typeof targetPercentage === 'number' && Math.abs(targetPercentage - (location.start.percentage || 0)) <= tolerance
+    },
+    /** The percentage in the footer from the displayed page, once the locations can tell it */
+    updateDisplayedProgress() {
+      const location = this.displayedLocation()
+      if (!location?.end?.percentage) return
+      this.progress = Math.round(location.end.percentage * 100)
+      this.currentLocationNum = location.start.location || 0
     },
     /**
      * Whether a saved position lies on the displayed page
@@ -566,18 +643,44 @@ export default {
 
       return locationsObject.locations
     },
-    /** Generate the cfi locations used by the location counter and by progress based resume */
+    /**
+     * Generate the cfi locations used by the location counter and by progress
+     * based resume. A generation already running is waited for, not repeated.
+     */
     generateLocations() {
-      return this.book.locations
+      if (this.locationsPromise) return this.locationsPromise
+      const book = this.book
+      this.locationsPromise = book.locations
         .generate(100)
         .then(() => {
-          this.totalLocations = this.book.locations.length()
-          this.currentLocationNum = this.displayedLocation()?.start?.location || 0
-          this.checkSaveLocations(this.book.locations.save())
+          if (book !== this.book) return
+          this.totalLocations = book.locations.length()
+          this.updateDisplayedProgress()
+          this.checkSaveLocations(book.locations.save())
         })
         .catch((error) => {
           console.error('[EpubReader] Failed to generate locations', error)
         })
+        .finally(() => {
+          if (book === this.book) this.locationsPromise = null
+        })
+      return this.locationsPromise
+    },
+    /**
+     * Whether resolving a saved position needs the cfi locations, which are
+     * not there yet: the position is only the character ratio, or the ratio
+     * refines a chapter (read aloud without paragraph cfis - Android Auto).
+     * Without the locations the book would open at the start of the chapter.
+     * @param {string|null} location - cfi or spine href
+     * @param {number} progress - ratio of the whole book, 0 when unknown
+     * @returns {boolean}
+     */
+    locationsNeededFor(location, progress) {
+      if (!(Number(progress) > 0) || Number(progress) >= 1 || this.book.locations.length()) return false
+      if (!location) return true
+      const isEpubLocation = location.startsWith('epubcfi') || isNaN(location)
+      if (!isEpubLocation || !this.getSpineSection(location)) return true
+      return this.isChapterGranularityLocation(location)
     },
     /**
      * Spine section a saved location points into, null when it resolves to none
@@ -621,7 +724,10 @@ export default {
     isChapterGranularityLocation(location) {
       if (!location.startsWith('epubcfi')) return true
       try {
-        return (new EpubCFI(location).path?.steps?.length || 0) <= 1
+        const cfi = new EpubCFI(location)
+        // A range (what the locations map a ratio to) is a place, its path is only the common parent
+        if (cfi.range) return false
+        return (cfi.path?.steps?.length || 0) <= 1
       } catch (error) {
         return false
       }
@@ -679,18 +785,29 @@ export default {
       }
       this.currentLocationNum = location.start.location
 
+      if (this.suppressRelocationSave) {
+        // Landed on a position from the server (goToLocation) - shown, not saved back
+        console.log(`[EpubReader] Displayed the position saved elsewhere ${location.start.cfi}`)
+        this.currentLocationCfi = location.start.cfi
+        if (location.end.percentage) this.progress = Math.round(location.end.percentage * 100)
+        return
+      }
+
       if (this.currentLocationCfi === location.start.cfi) {
         console.log(`[EpubReader] location already saved`, location.start.cfi)
         return
       }
 
-      if (this.suppressRelocationSave) {
-        // Landed on a position from the server (goToLocation) - shown, not saved back
-        console.log(`[EpubReader] Displayed the position saved elsewhere ${location.start.cfi}`)
-        this.suppressRelocationSave = false
-        this.currentLocationCfi = location.start.cfi
-        if (location.end.percentage) this.progress = Math.round(location.end.percentage * 100)
-        return
+      if (this.resumeGuardProgress !== null) {
+        const percentage = location.end.percentage || 0
+        if (!percentage || percentage < this.resumeGuardProgress - 0.01) {
+          // The saved position could not be opened - a page before it is not saved over it
+          console.log(`[EpubReader] Not saving ${location.start.cfi}, behind the saved position that failed to open`)
+          this.currentLocationCfi = location.start.cfi
+          if (percentage) this.progress = Math.round(percentage * 100)
+          return
+        }
+        this.resumeGuardProgress = null
       }
 
       console.log(`[EpubReader] Saving new location ${location.start.cfi}`)
@@ -761,14 +878,16 @@ export default {
         // background is the most current position - the saved progress in the
         // store lags behind it while the WebView was not running
         const ttsSession = await this.ttsNativeSessionState
-        let displayCfi = this.getSessionDisplayTarget(ttsSession) || this.getDisplayTarget()
-        if (!displayCfi && (this.savedEbookProgress || Number(ttsSession?.progress) > 0) && !reader.book.locations.length()) {
-          // Only the character ratio of the position is usable (read aloud
-          // extraction without cfis) - generating the locations maps it to a
-          // position, worth the wait to not restart the book
+        const sessionProgress = Number(ttsSession?.progress) > 0 && Number(ttsSession?.progress) < 1 ? Number(ttsSession.progress) : 0
+        if ((ttsSession && this.locationsNeededFor(ttsSession.location ? String(ttsSession.location) : null, sessionProgress)) || this.locationsNeededFor(this.savedEbookLocation, this.savedEbookProgress)) {
+          // The position is the character ratio, maybe refining a chapter
+          // (read aloud extraction without cfis, Android Auto) - generating
+          // the locations maps it to a place, worth the wait to not restart
+          // the book or the chapter
           await this.generateLocations()
-          displayCfi = this.getSessionDisplayTarget(ttsSession) || this.getDisplayTarget()
         }
+        let displayCfi = this.getSessionDisplayTarget(ttsSession) || this.getDisplayTarget()
+        const resumeProgress = displayCfi ? sessionProgress || this.savedEbookProgress : 0
         // Some epubs have spine entries referencing missing manifest items
         // (e.g. a dangling cover page). Displaying those fails and leaves the
         // reader blank - start at the first spine item that actually resolves.
@@ -812,16 +931,20 @@ export default {
           this.generateLocations()
         }
 
-        // TODO: To get the correct page need to render twice. On book ready and after first display. Figure out why
+        // One display lands short of a place deep in a long section - displayTarget repeats it until the page shows the place
         console.log(`[EpubReader] Displaying cfi ${displayCfi}`)
         this.currentLocationCfi = displayCfi
-        reader.rendition
-          .display(displayCfi)
-          .then(() => {
-            return reader.rendition.display(displayCfi)
-          })
-          .then(() => {
+        this.displayTarget(displayCfi)
+          .then((reached) => {
             this.inittingDisplay = false
+            this.currentLocationCfi = this.displayedLocation()?.start?.cfi || displayCfi
+            this.updateDisplayedProgress()
+            if (!reached && resumeProgress) {
+              // Pages turned from here are not saved until past the saved place (see relocated)
+              console.error(`[EpubReader] Failed to open the saved position ${displayCfi}`)
+              this.resumeGuardProgress = resumeProgress
+              this.$toast.error(this.$getString('ToastEbookResumeFailed', [Math.round(resumeProgress * 100)]))
+            }
           })
           .catch((error) => {
             // Saved location points into a section that no longer loads - fall
@@ -832,6 +955,10 @@ export default {
             this.currentLocationCfi = firstValidSection.href
             reader.rendition.display(firstValidSection.href).then(() => {
               this.inittingDisplay = false
+              if (resumeProgress) {
+                this.resumeGuardProgress = resumeProgress
+                this.$toast.error(this.$getString('ToastEbookResumeFailed', [Math.round(resumeProgress * 100)]))
+              }
             })
           })
       })

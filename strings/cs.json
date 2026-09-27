@@ -412,6 +412,7 @@
   "ToastBookmarkRemoveFailed": "Nepodařilo se odstranit záložku",
   "ToastBookmarkUpdateFailed": "Aktualizace záložky se nezdařila",
   "ToastDownloadNotAllowedOnCellular": "Stahování přes mobilní data není povoleno",
+  "ToastEbookResumeFailed": "Uložené místo v knize ({0} %) se nepodařilo otevřít. Stránky před ním se neuloží, dokud k němu nedojdete nebo nevyberete kapitolu.",
   "ToastGoToFurthestEbookPlaceFailed": "Nejvzdálenější místo se nepodařilo otevřít",
   "ToastItemMarkedAsFinishedFailed": "Nepodařilo se označit jako dokončené",
   "ToastItemMarkedAsNotFinishedFailed": "Nepodařilo se označit jako nedokončené",
