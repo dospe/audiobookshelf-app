@@ -8,7 +8,7 @@
 
 <script>
 import { Dialog } from '@capacitor/dialog'
-import { AbsFileSystem } from '@/plugins/capacitor'
+import { AbsFileSystem, AbsLogger } from '@/plugins/capacitor'
 
 export default {
   props: {
@@ -456,6 +456,7 @@ export default {
 
       this.$emit('update:processing', true)
       const payload = { ebookLocation: position.ebookLocation, ebookProgress: position.ebookProgress }
+      AbsLogger.info({ tag: 'ItemMoreMenuModal', message: `Going to the furthest ebook place ${payload.ebookLocation || 'no cfi'} at ${(payload.ebookProgress * 100).toFixed(1)}%` }).catch(() => {})
       const localLibraryItem = this.localLibraryItem?.media?.ebookFile ? this.localLibraryItem : null
       if (localLibraryItem) {
         const localResponse = await this.$db.updateLocalEbookProgress({ localLibraryItemId: localLibraryItem.id, ...payload }).catch((error) => {

@@ -138,6 +138,7 @@ import { Dialog } from '@capacitor/dialog'
 import { VolumeButtons } from '@capacitor-community/volume-buttons'
 import { KeepAwake } from '@capacitor-community/keep-awake'
 import { isNativeTTSPlayerAvailable } from '@/plugins/capacitor/AbsTTSPlayer'
+import { AbsLogger } from '@/plugins/capacitor'
 import { DEFAULT_EREADER_SETTINGS, BOOK_SETTING_KEYS, bookSettingsForDevice, withDeviceBookSettings, serverMergesBookSettings, deviceBookSettingsUpdate, applyBookSettingsUpdate, ttsLanguageItems, ttsLanguageForBookLanguage, withTtsVoice } from '@/utils/ereaderSettings'
 
 // BOOK_SETTING_KEYS are remembered per book (on the server) when they differ
@@ -1077,7 +1078,7 @@ export default {
       this.remotePositionOffer = null
       const reader = this.$refs.readerComponent
       if (!reader?.goToLocation || !offer) return
-      console.log(`[Reader] Turning to the position saved elsewhere (${offer.percent}%, ${offer.ebookLocation || 'no location'})`)
+      AbsLogger.info({ tag: 'Reader', message: `Turning to the position saved elsewhere (${offer.percent}%, ${offer.ebookLocation || 'no location'})` }).catch(() => {})
       const moved = await reader.goToLocation(offer.ebookLocation, offer.ebookProgress)
       if (moved === false) return
       this.readerEbookProgress = offer.ebookProgress
