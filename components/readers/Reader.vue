@@ -195,6 +195,8 @@ export default {
       // Positions this reader saved to the server, newest last ({ ebookLocation, ebookProgress, at })
       recentProgressSaves: [],
       lastProgressSavedAt: 0,
+      // lastUpdate of the progress the book opened from (see isOwnSavedPosition)
+      openedProgressAt: 0,
       // A newer position from another device waiting for the user (setting "ask"): { ebookLocation, ebookProgress, percent }
       remotePositionOffer: null,
       // Ratio of the book the reader is at as far as it saved or turned to, null until then
@@ -225,6 +227,7 @@ export default {
           this.readerEbookProgress = null
           this.recentProgressSaves = []
           this.lastProgressSavedAt = 0
+          this.openedProgressAt = 0
           this.registerListeners()
           this.hideToolbar()
           this.prepareReader()
@@ -673,7 +676,23 @@ export default {
         console.error('[Reader] Failed to refresh the item progress', error)
       }
       await settingsLoad
-      if (token === this.progressRefreshToken && this.show) this.progressReady = true
+      if (token !== this.progressRefreshToken || !this.show) return
+      this.openedProgressAt = this.getOpenedProgressLastUpdate()
+      this.progressReady = true
+    },
+    /**
+     * lastUpdate of the progress the reader resumes from: the local progress
+     * of a downloaded book, the server progress otherwise. A server position
+     * not newer than it is no position written elsewhere.
+     * @returns {number}
+     */
+    getOpenedProgressLastUpdate() {
+      if (this.localLibraryItem) {
+        const localProgress = this.$store.getters['globals/getLocalMediaProgressById'](this.localLibraryItem.id)
+        if (this.hasEbookPosition(localProgress)) return Number(localProgress.lastUpdate) || 0
+      }
+      const serverProgress = this.serverLibraryItemId ? this.$store.getters['user/getUserMediaProgress'](this.serverLibraryItemId) : null
+      return Number(serverProgress?.lastUpdate) || 0
     },
     /**
      * Bring the progress of the book up to date before the reader mounts.
@@ -999,11 +1018,16 @@ export default {
     },
     /**
      * Whether a progress from the server is an echo of what this reader saved
-     * (the server emits every save back through the socket) or older than
-     * its last save - either way not a position to follow.
+     * (the server emits every save back through the socket), older than its
+     * last save, or not newer than the progress the book opened from - none
+     * of them a position to follow. The last one keeps a downloaded book at
+     * the place saved on this device while the server could not be told
+     * (offline): the older server position would otherwise come back as
+     * "saved elsewhere" once the connection returns.
      * @param {Object} progress
      */
     isOwnSavedPosition(progress) {
+      if (this.openedProgressAt && Number(progress.lastUpdate) <= this.openedProgressAt) return true
       const location = progress.ebookLocation ? String(progress.ebookLocation) : ''
       if (location && this.recentProgressSaves.some((save) => save.ebookLocation === location)) return true
       if (!location && this.recentProgressSaves.some((save) => !save.ebookLocation && save.ebookProgress === Number(progress.ebookProgress))) return true
