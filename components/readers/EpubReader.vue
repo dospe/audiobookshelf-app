@@ -61,6 +61,10 @@ export default {
       locationsPromise: null,
       // A page turned while the locations were generated, saved once they are complete
       relocationPendingSave: false,
+      // Page start shown before a resize, turned to again once the resize is laid out (see refreshUI)
+      resizeAnchorCfi: null,
+      resizeSettling: false,
+      resizeGeneration: 0,
       ttsSectionIndex: 0,
       ereaderSettings: {
         theme: 'dark',
@@ -1066,10 +1070,40 @@ export default {
 
       this.isRefreshingUI = false
     },
-    refreshUI() {
-      if (this.rendition?.resize) {
-        this.rendition.resize(window.innerWidth, window.innerHeight - this.readerHeightOffset)
-      }
+    /**
+     * Fit the rendition to the window (orientation, toolbar and status bar,
+     * audio player). epub.js clears the views on a resize and displays the
+     * last reported place again, landing pages short of it in a long section,
+     * and that page would be saved - every tap showing the toolbar moved the
+     * book back. The page shown before is turned to again and checked, the
+     * places passed on the way are not saved.
+     */
+    async refreshUI() {
+      if (!this.rendition?.resize) return
+      this.resizeGeneration++
+      if (!this.resizeAnchorCfi && !this.inittingDisplay) this.resizeAnchorCfi = this.displayedLocation()?.start?.cfi || null
+      const anchor = this.resizeAnchorCfi
+      if (anchor) this.suppressRelocationSave = true
+      this.rendition.resize(window.innerWidth, window.innerHeight - this.readerHeightOffset)
+      // A resize while turning back after the previous one is handled by that call
+      if (!anchor || this.resizeSettling) return
+
+      this.resizeSettling = true
+      let generation
+      do {
+        generation = this.resizeGeneration
+        try {
+          // Queued after the display epub.js starts for the resize
+          await this.displayTarget(anchor)
+        } catch (error) {
+          console.error(`[EpubReader] Failed to display ${anchor} after a resize`, error)
+        }
+      } while (generation !== this.resizeGeneration)
+      this.resizeSettling = false
+      this.resizeAnchorCfi = null
+      this.suppressRelocationSave = false
+      this.currentLocationCfi = this.displayedLocation()?.start?.cfi || this.currentLocationCfi
+      this.updateDisplayedProgress()
     }
   },
   mounted() {
