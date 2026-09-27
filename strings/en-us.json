@@ -412,6 +412,7 @@
   "ToastBookmarkRemoveFailed": "Failed to remove bookmark",
   "ToastBookmarkUpdateFailed": "Failed to update bookmark",
   "ToastDownloadNotAllowedOnCellular": "Downloading is not allowed on cellular data",
+  "ToastEbookResumeFailed": "Could not open the saved place in the book ({0}%). Pages before it are not saved until you reach it or pick a chapter.",
   "ToastGoToFurthestEbookPlaceFailed": "Failed to go to the furthest place",
   "ToastItemMarkedAsFinishedFailed": "Failed to mark as Finished",
   "ToastItemMarkedAsNotFinishedFailed": "Failed to mark as Not Finished",
